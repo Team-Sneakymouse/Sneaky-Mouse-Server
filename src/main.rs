@@ -8,7 +8,7 @@ fn main() {
     let mut con = client.get_connection().expect("Could not connect");
 
     let _ : redis::Value = redis::cmd("SET").arg("my_key").arg(42i32).query(&mut con).expect("Could not SET my_key to redis database");
-    let val : String = redis::cmd("GET").arg("my_key").query(&mut con).expect("Could not GET my_key to redis database");
+    let val : String = redis::cmd("GET").arg("my_key").query(&mut con).expect("Could not GET my_key from redis database");
     print!("{}\n", val);
 
 
