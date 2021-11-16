@@ -7,29 +7,10 @@
 		{
 			"type": "lldb",
 			"request": "launch",
-			"name": "Debug 'sneaky-mouse-server'",
+			"name": "debug sneaky-mouse-server",
 			"cargo": {
 				"args": [
 					"build",
-					"--bin=sneaky-mouse-server",
-					"--package=sneaky-mouse-server"
-				],
-				"filter": {
-					"name": "sneaky-mouse-server",
-					"kind": "bin"
-				}
-			},
-			"args": [],
-			"cwd": "${workspaceFolder}"
-		},
-		{
-			"type": "lldb",
-			"request": "launch",
-			"name": "Debug unit tests in executable 'sneaky-mouse-server'",
-			"cargo": {
-				"args": [
-					"test",
-					"--no-run",
 					"--bin=sneaky-mouse-server",
 					"--package=sneaky-mouse-server"
 				],
