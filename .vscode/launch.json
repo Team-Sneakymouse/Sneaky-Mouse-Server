@@ -7,15 +7,15 @@
 		{
 			"type": "lldb",
 			"request": "launch",
-			"name": "Debug executable 'rest-api'",
+			"name": "Debug 'sneaky-mouse-server'",
 			"cargo": {
 				"args": [
 					"build",
-					"--bin=rest-api",
-					"--package=rest-api"
+					"--bin=sneaky-mouse-server",
+					"--package=sneaky-mouse-server"
 				],
 				"filter": {
-					"name": "rest-api",
+					"name": "sneaky-mouse-server",
 					"kind": "bin"
 				}
 			},
@@ -25,16 +25,16 @@
 		{
 			"type": "lldb",
 			"request": "launch",
-			"name": "Debug unit tests in executable 'rest-api'",
+			"name": "Debug unit tests in executable 'sneaky-mouse-server'",
 			"cargo": {
 				"args": [
 					"test",
 					"--no-run",
-					"--bin=rest-api",
-					"--package=rest-api"
+					"--bin=sneaky-mouse-server",
+					"--package=sneaky-mouse-server"
 				],
 				"filter": {
-					"name": "rest-api",
+					"name": "sneaky-mouse-server",
 					"kind": "bin"
 				}
 			},
