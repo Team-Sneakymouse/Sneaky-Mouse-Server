@@ -4,11 +4,11 @@
 extern crate redis;
 
 
-const REDIS_PRIMARY_IN_STREAM : &str = "sneaky_mouse_in";
 const REDIS_STREAM_TIMEOUT_MS : i32 = 2000;
 const REDIS_STREAM_READ_COUNT : i32 = 55;
-const REDIS_TIME_BETWEEN_RETRY_CON : u64 = 2;
+const REDIS_TIME_BETWEEN_RETRY_CON : u64 = 5;
 const REDIS_RETRY_CON_MAX_ATTEMPTS : i32 = 5;
+const REDIS_PRIMARY_IN_STREAM : &str = "sneaky_mouse_in";
 const REDIS_INIT_STREAM_ID_KEY : &str = "sneaky_mouse_in-last_used_id";
 
 struct SneakyMouseServer<'a> {
@@ -17,7 +17,7 @@ struct SneakyMouseServer<'a> {
 }
 
 fn sneaky_mouse_in_message_received(_server_state : &mut SneakyMouseServer, _id : &str, _keys : &[&[u8]], _vals : &[&[u8]]) -> Option<bool> {
-	true
+	Some(true)
 }
 
 fn connect_to_redis(redis_address : &str) -> Option<redis::Connection> {
@@ -29,7 +29,7 @@ fn connect_to_redis(redis_address : &str) -> Option<redis::Connection> {
 					return Some(con);
 				}
 				Err(error) => {
-					print!("failed to connect to server: {}\n", error);
+					print!("failed to connect to '{}': {}\n", redis_address, error);
 				}
 			}
 			Err(error) => panic!("could not parse redis url \'{}\': {}\n", redis_address, error)
@@ -37,7 +37,7 @@ fn connect_to_redis(redis_address : &str) -> Option<redis::Connection> {
 		std::thread::sleep(std::time::Duration::from_secs(REDIS_TIME_BETWEEN_RETRY_CON));
 	}
 
-	print!("connection attempts to {} exceeded {}, shutting down; contact an admin to restart the redis server\n", redis_address, REDIS_RETRY_CON_MAX_ATTEMPTS);
+	print!("connection attempts to exceeded {}, shutting down: contact an admin to restart the redis server\n", REDIS_RETRY_CON_MAX_ATTEMPTS);
 	return None;
 }
 
