@@ -4,8 +4,14 @@
 extern crate redis;
 
 const REDIS_PRIMARY_IN_STREAM : &str = "sneaky_mouse_in";
-const REDIS_STREAM_TIMEOUT_MS : i32 = 5000;
+const REDIS_STREAM_TIMEOUT_MS : i32 = 2000;
+const REDIS_STREAM_READ_COUNT : i32 = 55;
 const REDIS_INIT_STREAM_ID_KEY : &str = "sneaky_mouse_in-last_used_id";
+
+fn sneaky_mouse_in_message_received(_message_id : &str, _message_raw_keys : &[&[u8]], _message_raw_vals : &[&[u8]]) {
+
+}
+
 
 fn main() {
 	let redis_address: String;
@@ -21,67 +27,89 @@ fn main() {
 	// print!("{}\n", val);
 
 
-	let mut last_id;
-	let result_id : Result<redis::Value, redis::RedisError> = redis::cmd("GET").arg(REDIS_INIT_STREAM_ID_KEY).query(&mut con);
+	let mut last_id : String;
+	let result_id : Result<redis::Value, redis::RedisError> = Ok(redis::Value::Nil);
+	// let result_id : Result<redis::Value, redis::RedisError> = redis::cmd("GET").arg(REDIS_INIT_STREAM_ID_KEY).query(&mut con);
 	match result_id {
 		Ok(id_data) => match id_data {
 			redis::Value::Data(id_raw) => last_id = String::from_utf8_lossy(&id_raw).into_owned(),
 			_ => last_id = String::from("0-0"),
 		}
 		Err(error) => {
-			panic!("redis error, did the server connection die?: {:?}\n", error);
+			panic!("redis error, did the server connection die?: {}\n", error);
 			//TODO: attempt recovery
 			// last_id = String::from("0-0");
 		}
 	}
 
 	loop {
+		let mut message_keys = Vec::<&[u8]>::new();
+		let mut message_vals = Vec::<&[u8]>::new();
 		// let _ : redis::Value = redis::cmd("XADD").arg(REDIS_PRIMARY_IN_STREAM).arg("*").arg("my_key").arg("my_val").query(&mut con).expect("XADD failed");
-		let response : Result<redis::Value, redis::RedisError> = redis::cmd("XREAD").arg("COUNT").arg(1).arg("BLOCK").arg(REDIS_STREAM_TIMEOUT_MS).arg("STREAMS").arg(REDIS_PRIMARY_IN_STREAM).arg(&last_id).query(&mut con);
+		let response : Result<redis::Value, redis::RedisError> = redis::cmd("XREAD").arg("COUNT").arg(REDIS_STREAM_READ_COUNT).arg("BLOCK").arg(REDIS_STREAM_TIMEOUT_MS).arg("STREAMS").arg(REDIS_PRIMARY_IN_STREAM).arg(&last_id).query(&mut con);
 
+		//NOTE(mami): this code was built upon the principle of non-pesimization; as such there are shorter ways to do this, but most of them are either not fast or not robust
 		match response {
 			Ok(response_data) => {
 				// print!("response_data = {:?}\n", response_data);
-				let mut valid_response = false;
+				//lol I think redis overdoes its data packing, at least its not json..
 				if let redis::Value::Bulk(stream_responses) = response_data {
 					if let redis::Value::Bulk(stream_response) = &stream_responses[0] {
 						if let redis::Value::Bulk(stream_messages) = &stream_response[1] {
-							if let redis::Value::Bulk(message) = &stream_messages[0] {
-								if let redis::Value::Data(message_id_raw) = &message[0] {
-									if let redis::Value::Bulk(message_body) = &message[1] {
-										if let redis::Value::Data(message_key_raw) = &message_body[0] {
-											if let redis::Value::Data(message_val_raw) = &message_body[1] {//lol I think redis overdoes its data packing, at least its not json..
-												valid_response = true;
-												let message_id_str = String::from_utf8_lossy(message_id_raw);
-												let message_key = String::from_utf8_lossy(message_key_raw);
-												let message_val = String::from_utf8_lossy(message_val_raw);
-												print!("message id {:?} with key-val {:?}-{:?}\n", message_id_str, message_key, message_val);
-												last_id = message_id_str.into_owned();
-												let result_set : Result<redis::Value, redis::RedisError> = redis::cmd("SET").arg(REDIS_INIT_STREAM_ID_KEY).arg(&last_id).query(&mut con);
-												match result_set {
-													Ok(_) => {},
-													Err(error) => {
-														print!("redis error, the last consumed message was not saved!: {:?}\n", error);
-														//TODO: reattempt to save last_id
+							for message_data in stream_messages {
+								if let redis::Value::Bulk(message) = message_data {
+									if let redis::Value::Data(message_id_raw) = &message[0] {
+										if let redis::Value::Bulk(message_body) = &message[1] {
+											for i in 0..message_body.len()/2 {
+												if let redis::Value::Data(message_key_raw) = &message_body[i] {
+													if let redis::Value::Data(message_val_raw) = &message_body[i + 1] {
+														message_keys.push(&message_key_raw[..]);
+														message_vals.push(&message_val_raw[..]);
+													} else {
+														panic!("critical error: redis response does not match expected specification\n");
 													}
+												} else {
+													panic!("critical error: redis response does not match expected specification\n");
 												}
 											}
+											let message_id_str : &str = std::str::from_utf8(message_id_raw).expect("critical error: redis returned a non-utf8 message id; did we misunderstand the specification?");
+											sneaky_mouse_in_message_received(message_id_str, &message_keys[..], &message_vals[..]);
+
+											last_id.clear();
+											last_id.push_str(message_id_str);//this avoids allocating
+											let result_set : Result<redis::Value, redis::RedisError> = redis::cmd("SET").arg(REDIS_INIT_STREAM_ID_KEY).arg(&last_id).query(&mut con);
+											match result_set {
+												Ok(_) => (),
+												Err(error) => {
+													print!("redis error, the last consumed message was not saved!: {}\n", error);
+													//TODO: reattempt to save last_id?
+												}
+											}
+											message_keys.clear();
+											message_vals.clear();
+										} else {
+											panic!("critical error: redis response does not match expected specification\n");
 										}
+									} else {
+										panic!("critical error: redis response does not match expected specification\n");
 									}
+								} else {
+									panic!("critical error: redis response does not match expected specification\n");
 								}
 							}
+						} else {
+							panic!("critical error: redis response does not match expected specification\n");
 						}
+					} else {
+						panic!("critical error: redis response does not match expected specification\n");
 					}
 				} else if let redis::Value::Nil = response_data {
-					valid_response = true;
-					print!("no messages received before timeout, trying again...\n");
+					print!("no messages received before timeout, last id was {}; trying again...\n", last_id);
 				}
-				if !valid_response {
-					panic!("critical error: redis response does not match expected specification\n");
-				}
+
 			}
 			Err(error) => {
-				panic!("redis error, did the server connection die?: {:?}\n", error);
+				panic!("redis error, did the server connection die?: {}\n", error);
 				//TODO: attempt recovery
 			}
 		}
