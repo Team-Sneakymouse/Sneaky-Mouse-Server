@@ -94,7 +94,9 @@ fn server_main() -> Option<bool> {
 		let mut message_vals = Vec::<&[u8]>::new();
 		// let _ : redis::Value = redis::cmd("XADD").arg(REDIS_PRIMARY_IN_STREAM).arg("*").arg("my_key").arg("my_val").query(&mut con).expect("XADD failed");
 		// let query = redis::cmd("XREAD").arg("COUNT").arg(REDIS_STREAM_READ_COUNT).arg("BLOCK").arg(REDIS_STREAM_TIMEOUT_MS).arg("STREAMS").arg(REDIS_PRIMARY_IN_STREAM).arg(&last_id);
-		let response : redis::Value = auto_retry_redis_cmd(&mut server_state, redis::cmd("XREAD").arg("COUNT").arg(REDIS_STREAM_READ_COUNT).arg("BLOCK").arg(REDIS_STREAM_TIMEOUT_MS).arg("STREAMS").arg(REDIS_PRIMARY_IN_STREAM).arg(&last_id))?;
+		let mut cmd = redis::cmd("XREAD");
+		cmd.arg("COUNT").arg(REDIS_STREAM_READ_COUNT).arg("BLOCK").arg(REDIS_STREAM_TIMEOUT_MS).arg("STREAMS").arg(REDIS_PRIMARY_IN_STREAM).arg(&last_id);
+		let response : redis::Value = auto_retry_redis_cmd(&mut server_state, &mut cmd)?;
 
 		//NOTE(mami): this code was built upon the principle of non-pesimization; as such there are shorter ways to do this, but most of them are either not fast or not robust
 		if let redis::Value::Bulk(stream_responses) = response {
