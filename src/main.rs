@@ -4,7 +4,12 @@
 extern crate redis;
 
 fn main() {
-    let client = redis::Client::open("redis://127.0.0.1/").expect("Could not connect");
+    let redis_address: String;
+    match std::env::var("REDIS_ADDRESS") {
+        Ok(val) => redis_address = val,
+        Err(_e) => redis_address = String::from("redis://127.0.0.1/"),
+    }
+    let client = redis::Client::open(redis_address).expect("Could not connect");
     let mut con = client.get_connection().expect("Could not connect");
 
     let _ : redis::Value = redis::cmd("SET").arg("my_key").arg(42i32).query(&mut con).expect("Could not SET my_key to redis database");
