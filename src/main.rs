@@ -16,7 +16,7 @@ struct SneakyMouseServer<'a> {
 	redis_address : &'a str,
 }
 
-fn sneaky_mouse_in_message_received(_server_state : &mut SneakyMouseServer, _id : &str, _keys : &[&[u8]], _vals : &[&[u8]]) -> bool {
+fn sneaky_mouse_in_message_received(_server_state : &mut SneakyMouseServer, _id : &str, _keys : &[&[u8]], _vals : &[&[u8]]) -> Option<bool> {
 	true
 }
 
@@ -65,17 +65,13 @@ fn auto_retry_redis_cmd<T : redis::FromRedisValue> (server_state : &mut SneakyMo
 	}
 }
 
-fn main() {
+fn server_main() -> Option<bool> {
 	let redis_address: String;
 	match std::env::var("REDIS_ADDRESS") {
 		Ok(val) => redis_address = val,
 		Err(_e) => redis_address = String::from("redis://127.0.0.1/"),
 	}
-	let con;
-	match connect_to_redis(&redis_address[..]) {
-		Some(ret_con) => con = ret_con,
-		None => return
-	}
+	let con = connect_to_redis(&redis_address[..])?;
 
 	let mut server_state = SneakyMouseServer{redis_con : con, redis_address : &redis_address[..]};
 
@@ -85,16 +81,12 @@ fn main() {
 
 
 	let mut last_id : String;
-	// let result_id : Result<redis::Value, redis::RedisError> = Ok(redis::Value::Nil);
 	// let query = ;
-	match auto_retry_redis_cmd(&mut server_state, redis::cmd("GET").arg(REDIS_INIT_STREAM_ID_KEY)) {
-		Some(id_data) => match id_data {
-			redis::Value::Data(id_raw) => last_id = String::from_utf8_lossy(&id_raw).into_owned(),
-			_ => last_id = String::from("0-0"),
-		}
-		None => return
+	let id_data = auto_retry_redis_cmd(&mut server_state, redis::cmd("GET").arg(REDIS_INIT_STREAM_ID_KEY))?;
+	match id_data {
+		redis::Value::Data(id_raw) => last_id = String::from_utf8_lossy(&id_raw).into_owned(),//TODO: improve this
+		_ => last_id = String::from("0-0"),
 	}
-
 
 
 	loop {
@@ -102,10 +94,7 @@ fn main() {
 		let mut message_vals = Vec::<&[u8]>::new();
 		// let _ : redis::Value = redis::cmd("XADD").arg(REDIS_PRIMARY_IN_STREAM).arg("*").arg("my_key").arg("my_val").query(&mut con).expect("XADD failed");
 		// let query = redis::cmd("XREAD").arg("COUNT").arg(REDIS_STREAM_READ_COUNT).arg("BLOCK").arg(REDIS_STREAM_TIMEOUT_MS).arg("STREAMS").arg(REDIS_PRIMARY_IN_STREAM).arg(&last_id);
-		let response : redis::Value;
-		match auto_retry_redis_cmd(&mut server_state, redis::cmd("XREAD").arg("COUNT").arg(REDIS_STREAM_READ_COUNT).arg("BLOCK").arg(REDIS_STREAM_TIMEOUT_MS).arg("STREAMS").arg(REDIS_PRIMARY_IN_STREAM).arg(&last_id)) {
-			Some(data) => response = data, None => return
-		}
+		let response : redis::Value = auto_retry_redis_cmd(&mut server_state, redis::cmd("XREAD").arg("COUNT").arg(REDIS_STREAM_READ_COUNT).arg("BLOCK").arg(REDIS_STREAM_TIMEOUT_MS).arg("STREAMS").arg(REDIS_PRIMARY_IN_STREAM).arg(&last_id))?;
 
 		//NOTE(mami): this code was built upon the principle of non-pesimization; as such there are shorter ways to do this, but most of them are either not fast or not robust
 		if let redis::Value::Bulk(stream_responses) = response {
@@ -128,9 +117,10 @@ fn main() {
 										}
 									}
 									let message_id_str : &str = std::str::from_utf8(message_id_raw).expect("critical error: redis returned a non-utf8 message id; did we misunderstand the specification?");
-									if !sneaky_mouse_in_message_received(&mut server_state, message_id_str, &message_keys[..], &message_vals[..]) {
-										return;
-									}
+
+
+									sneaky_mouse_in_message_received(&mut server_state, message_id_str, &message_keys[..], &message_vals[..])?;
+
 
 									last_id.clear();
 									last_id.push_str(message_id_str);//this avoids allocating
@@ -164,4 +154,8 @@ fn main() {
 
 	// let query_as_str : String = redis::from_redis_value(&query).expect("Could not interpret redis stream query as a rust string");//This will cause the written error if run, because the returned query is not compatible with the string type! query, roughly speaking, is more of a multidimensional list than a string
 	// print!("{}\n", query_as_str);
+}
+
+fn main() {
+	server_main();
 }
