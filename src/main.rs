@@ -3,6 +3,13 @@
 // #[macro_use]
 extern crate redis;
 
+fn vec_drop_and_reuse<'a, 'b, T : ?Sized>(mut vec : Vec<&'a T>) -> Vec<&'b T> {
+	//this function is a superior version of .clear()
+	//the borrow checker does not acknowledge that .clear() drops all borrowed references, so we have to force it too
+	vec.clear();
+	unsafe {std::mem::transmute(vec)}
+}
+
 
 const REDIS_STREAM_TIMEOUT_MS : i32 = 2000;
 const REDIS_STREAM_READ_COUNT : i32 = 55;
@@ -16,11 +23,7 @@ struct SneakyMouseServer<'a> {
 	redis_address : &'a str,
 }
 
-fn sneaky_mouse_in_message_received(_server_state : &mut SneakyMouseServer, _id : &str, _keys : &[&[u8]], _vals : &[&[u8]]) -> Option<bool> {
-	Some(true)
-}
-
-fn connect_to_redis(redis_address : &str) -> Option<redis::Connection> {
+fn redis_connect_to(redis_address : &str) -> Option<redis::Connection> {
 	for _ in 1..REDIS_RETRY_CON_MAX_ATTEMPTS {
 		match redis::Client::open(redis_address) {
 			Ok(client) => match client.get_connection() {
@@ -41,29 +44,31 @@ fn connect_to_redis(redis_address : &str) -> Option<redis::Connection> {
 	return None;
 }
 
-fn auto_retry_redis_cmd<T : redis::FromRedisValue> (server_state : &mut SneakyMouseServer, cmd : &redis::Cmd) -> Option<T> {
+fn redis_auto_retry_cmd<T : redis::FromRedisValue>(server_state : &mut SneakyMouseServer, cmd : &redis::Cmd) -> Option<T> {
+	//NOTE: this can trigger a long thread::sleep() if reconnection fails
 	match cmd.query(&mut server_state.redis_con) {
 		Ok(data) => return Some(data),
 		Err(error) => {
 			print!("Lost connection to the server: {}\n", error);
 			print!("Attempting to reconnect\n");
 
-			match connect_to_redis(&server_state.redis_address[..]) {
-				Some(con) => {
-					server_state.redis_con = con;
-					match cmd.query(&mut server_state.redis_con) {
-						Ok(data) => return Some(data),
-						Err(error) => {
-							print!("connection immediately failed on retry, shutting down: {}\n", error);
-							return None
-						}
-					}
+			let con = redis_connect_to(&server_state.redis_address[..])?;
+			server_state.redis_con = con;
+			match cmd.query(&mut server_state.redis_con) {
+				Ok(data) => return Some(data),
+				Err(error) => {
+					print!("connection immediately failed on retry, shutting down: {}\n", error);
+					return None
 				}
-				None => return None
 			}
 		}
 	}
 }
+
+fn sneaky_mouse_in_message_received(_server_state : &mut SneakyMouseServer, _id : &str, _keys : &[&[u8]], _vals : &[&[u8]]) -> Option<bool> {
+	Some(true)
+}
+
 
 fn server_main() -> Option<bool> {
 	let redis_address: String;
@@ -71,7 +76,7 @@ fn server_main() -> Option<bool> {
 		Ok(val) => redis_address = val,
 		Err(_e) => redis_address = String::from("redis://127.0.0.1/"),
 	}
-	let con = connect_to_redis(&redis_address[..])?;
+	let con = redis_connect_to(&redis_address[..])?;
 
 	let mut server_state = SneakyMouseServer{redis_con : con, redis_address : &redis_address[..]};
 
@@ -82,23 +87,23 @@ fn server_main() -> Option<bool> {
 
 	let mut last_id : String;
 	// let query = ;
-	let id_data = auto_retry_redis_cmd(&mut server_state, redis::cmd("GET").arg(REDIS_INIT_STREAM_ID_KEY))?;
+	let id_data = redis_auto_retry_cmd(&mut server_state, redis::cmd("GET").arg(REDIS_INIT_STREAM_ID_KEY))?;
 	match id_data {
 		redis::Value::Data(id_raw) => last_id = String::from_utf8_lossy(&id_raw).into_owned(),//TODO: improve this
 		_ => last_id = String::from("0-0"),
 	}
 
 
+	let mut message_keys_mem = Vec::<&[u8]>::new();
+	let mut message_vals_mem = Vec::<&[u8]>::new();
 	loop {
-		let mut message_keys = Vec::<&[u8]>::new();
-		let mut message_vals = Vec::<&[u8]>::new();
 		// let _ : redis::Value = redis::cmd("XADD").arg(REDIS_PRIMARY_IN_STREAM).arg("*").arg("my_key").arg("my_val").query(&mut con).expect("XADD failed");
 		// let query = redis::cmd("XREAD").arg("COUNT").arg(REDIS_STREAM_READ_COUNT).arg("BLOCK").arg(REDIS_STREAM_TIMEOUT_MS).arg("STREAMS").arg(REDIS_PRIMARY_IN_STREAM).arg(&last_id);
 		let mut cmd = redis::cmd("XREAD");
 		cmd.arg("COUNT").arg(REDIS_STREAM_READ_COUNT).arg("BLOCK").arg(REDIS_STREAM_TIMEOUT_MS).arg("STREAMS").arg(REDIS_PRIMARY_IN_STREAM).arg(&last_id);
-		let response : redis::Value = auto_retry_redis_cmd(&mut server_state, &mut cmd)?;
+		let response : redis::Value = redis_auto_retry_cmd(&mut server_state, &mut cmd)?;
 
-		//NOTE(mami): this code was built upon the principle of non-pesimization; as such there are shorter ways to do this, but most of them are either not fast or not robust
+		//NOTE(mami): this code was built upon the principle of non-pesimization; as such there are shorter ways to do this, but most of them are not fast nor robust
 		if let redis::Value::Bulk(stream_responses) = response {
 			if let redis::Value::Bulk(stream_response) = &stream_responses[0] {
 				if let redis::Value::Bulk(stream_messages) = &stream_response[1] {
@@ -106,6 +111,8 @@ fn server_main() -> Option<bool> {
 						if let redis::Value::Bulk(message) = message_data {
 							if let redis::Value::Data(message_id_raw) = &message[0] {
 								if let redis::Value::Bulk(message_body) = &message[1] {
+									let mut message_keys = message_keys_mem;
+									let mut message_vals = message_vals_mem;
 									for i in 0..message_body.len()/2 {
 										if let redis::Value::Data(message_key_raw) = &message_body[i] {
 											if let redis::Value::Data(message_val_raw) = &message_body[i + 1] {
@@ -131,8 +138,8 @@ fn server_main() -> Option<bool> {
 										print!("redis error, the last consumed message was not saved!: {}\n", error);
 										//TODO: reattempt to save last_id?
 									}
-									message_keys.clear();
-									message_vals.clear();
+									message_keys_mem = vec_drop_and_reuse(message_keys);
+									message_vals_mem = vec_drop_and_reuse(message_vals);
 								} else {
 									panic!("critical error: redis response does not match expected specification\n");
 								}
@@ -153,9 +160,6 @@ fn server_main() -> Option<bool> {
 			print!("no messages received before timeout, last id was {}; trying again...\n", last_id);
 		}
 	}
-
-	// let query_as_str : String = redis::from_redis_value(&query).expect("Could not interpret redis stream query as a rust string");//This will cause the written error if run, because the returned query is not compatible with the string type! query, roughly speaking, is more of a multidimensional list than a string
-	// print!("{}\n", query_as_str);
 }
 
 fn main() {
