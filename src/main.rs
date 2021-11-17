@@ -3,12 +3,17 @@
 // #[macro_use]
 extern crate redis;
 
+
 const REDIS_PRIMARY_IN_STREAM : &str = "sneaky_mouse_in";
 const REDIS_STREAM_TIMEOUT_MS : i32 = 2000;
 const REDIS_STREAM_READ_COUNT : i32 = 55;
 const REDIS_INIT_STREAM_ID_KEY : &str = "sneaky_mouse_in-last_used_id";
 
-fn sneaky_mouse_in_message_received(_message_id : &str, _message_raw_keys : &[&[u8]], _message_raw_vals : &[&[u8]]) {
+struct SneakyMouseServer {
+	redis_con : redis::Connection,
+}
+
+fn sneaky_mouse_in_message_received(_server_state : &mut SneakyMouseServer, _id : &str, _keys : &[&[u8]], _vals : &[&[u8]]) -> () {
 
 }
 
@@ -28,8 +33,8 @@ fn main() {
 
 
 	let mut last_id : String;
-	let result_id : Result<redis::Value, redis::RedisError> = Ok(redis::Value::Nil);
-	// let result_id : Result<redis::Value, redis::RedisError> = redis::cmd("GET").arg(REDIS_INIT_STREAM_ID_KEY).query(&mut con);
+	// let result_id : Result<redis::Value, redis::RedisError> = Ok(redis::Value::Nil);
+	let result_id : Result<redis::Value, redis::RedisError> = redis::cmd("GET").arg(REDIS_INIT_STREAM_ID_KEY).query(&mut con);
 	match result_id {
 		Ok(id_data) => match id_data {
 			redis::Value::Data(id_raw) => last_id = String::from_utf8_lossy(&id_raw).into_owned(),
@@ -42,11 +47,13 @@ fn main() {
 		}
 	}
 
+	let mut server_state = SneakyMouseServer{redis_con : con};
+
 	loop {
 		let mut message_keys = Vec::<&[u8]>::new();
 		let mut message_vals = Vec::<&[u8]>::new();
 		// let _ : redis::Value = redis::cmd("XADD").arg(REDIS_PRIMARY_IN_STREAM).arg("*").arg("my_key").arg("my_val").query(&mut con).expect("XADD failed");
-		let response : Result<redis::Value, redis::RedisError> = redis::cmd("XREAD").arg("COUNT").arg(REDIS_STREAM_READ_COUNT).arg("BLOCK").arg(REDIS_STREAM_TIMEOUT_MS).arg("STREAMS").arg(REDIS_PRIMARY_IN_STREAM).arg(&last_id).query(&mut con);
+		let response : Result<redis::Value, redis::RedisError> = redis::cmd("XREAD").arg("COUNT").arg(REDIS_STREAM_READ_COUNT).arg("BLOCK").arg(REDIS_STREAM_TIMEOUT_MS).arg("STREAMS").arg(REDIS_PRIMARY_IN_STREAM).arg(&last_id).query(&mut server_state.redis_con);
 
 		//NOTE(mami): this code was built upon the principle of non-pesimization; as such there are shorter ways to do this, but most of them are either not fast or not robust
 		match response {
@@ -73,17 +80,14 @@ fn main() {
 												}
 											}
 											let message_id_str : &str = std::str::from_utf8(message_id_raw).expect("critical error: redis returned a non-utf8 message id; did we misunderstand the specification?");
-											sneaky_mouse_in_message_received(message_id_str, &message_keys[..], &message_vals[..]);
+											sneaky_mouse_in_message_received(&mut server_state, message_id_str, &message_keys[..], &message_vals[..]);
 
 											last_id.clear();
 											last_id.push_str(message_id_str);//this avoids allocating
-											let result_set : Result<redis::Value, redis::RedisError> = redis::cmd("SET").arg(REDIS_INIT_STREAM_ID_KEY).arg(&last_id).query(&mut con);
-											match result_set {
-												Ok(_) => (),
-												Err(error) => {
-													print!("redis error, the last consumed message was not saved!: {}\n", error);
-													//TODO: reattempt to save last_id?
-												}
+											let result_set : Result<redis::Value, redis::RedisError> = redis::cmd("SET").arg(REDIS_INIT_STREAM_ID_KEY).arg(&last_id).query(&mut server_state.redis_con);
+											if let Err(error) = result_set {
+												print!("redis error, the last consumed message was not saved!: {}\n", error);
+												//TODO: reattempt to save last_id?
 											}
 											message_keys.clear();
 											message_vals.clear();
