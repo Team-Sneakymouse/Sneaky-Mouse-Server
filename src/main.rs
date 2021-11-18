@@ -1,4 +1,5 @@
 //By Mami
+#![allow(unused_variables)]
 extern crate redis;
 
 mod config;

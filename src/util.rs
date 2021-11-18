@@ -36,7 +36,7 @@ pub fn find_val<'a>(key : &str, keys : &[&[u8]], vals : &[&'a[u8]]) -> Option<&'
 
 // #[derive(Clone, Copy, Debug)]
 pub fn connect_to(redis_address : &str) -> Option<redis::Connection> {
-	for _ in 1..config::REDIS_RETRY_CON_MAX_ATTEMPTS {
+	for _ in 1..=config::REDIS_RETRY_CON_MAX_ATTEMPTS {
 		match redis::Client::open(redis_address) {
 			Ok(client) => match client.get_connection() {
 				Ok(con) => {
