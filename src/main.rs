@@ -49,9 +49,8 @@ fn server_main() -> Option<bool> {
 		}
 	}
 
-	print!("{}\n", String::from_utf8_lossy(&last_ids[0]));
-
-	let mut event_kvs_mem = Vec::<(&[u8], &[u8])>::new();
+	let mut event_keys_mem = Vec::<&[u8]>::new();
+	let mut event_vals_mem = Vec::<&[u8]>::new();
 	let opts = redis::streams::StreamReadOptions::default().count(config::REDIS_STREAM_READ_COUNT).block(config::REDIS_STREAM_TIMEOUT_MS);
 	loop {
 		// let v : redis::Value = redis::Cmd::xadd("debug", "*", &[("key55", "val232")]).query(&mut server_state.redis_con).expect("yolo\n");
@@ -69,11 +68,13 @@ fn server_main() -> Option<bool> {
 								if let redis::Value::Bulk(message) = message_data {
 									if let redis::Value::Data(message_id_raw) = &message[0] {
 										if let redis::Value::Bulk(message_body) = &message[1] {
-											let mut event_kvs = event_kvs_mem;
+											let mut event_keys = event_keys_mem;
+											let mut event_vals = event_vals_mem;
 											for i in 0..message_body.len()/2 {
 												if let redis::Value::Data(message_key_raw) = &message_body[i] {
 													if let redis::Value::Data(message_val_raw) = &message_body[i + 1] {
-														event_kvs.push((&message_key_raw[..], &message_val_raw[..]));
+														event_keys.push(&message_key_raw[..]);
+														event_vals.push(&message_val_raw[..]);
 													} else {
 														panic!("fatal error: redis response does not match expected specification\n");
 													}
@@ -83,7 +84,7 @@ fn server_main() -> Option<bool> {
 											}
 											// let stream_name : &str = std::str::from_utf8(stream_name_raw).expect("fatal error: redis returned a non-utf8 stream name; did we misunderstand the specification?");
 
-											event::server_event_received(&mut server_state, &stream_name_raw, message_id_raw, &event_kvs[..])?;
+											event::server_event_received(&mut server_state, &stream_name_raw, message_id_raw, &event_keys[..], &event_vals[..])?;
 
 
 											let i = events.binary_search(&&stream_name_raw[..]).expect("fatal error: we received an unrecognized event, how did this not get caught until now?");
@@ -102,8 +103,10 @@ fn server_main() -> Option<bool> {
 												}
 											}
 											//the borrow checker does not acknowledge that .clear() drops all borrowed references, so we have to force it to
-											event_kvs.clear();
-											event_kvs_mem = unsafe {std::mem::transmute(event_kvs)};
+											event_keys.clear();
+											event_vals.clear();
+											event_keys_mem = unsafe {std::mem::transmute(event_keys)};
+											event_vals_mem = unsafe {std::mem::transmute(event_vals)};
 										} else {
 											panic!("fatal error: redis response does not match expected specification\n");
 										}
