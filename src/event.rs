@@ -1,8 +1,9 @@
 //By Mami
-
 use rand_pcg::*;
 use crate::config::*;
 use crate::util;
+use rand::{Rng, RngCore, SeedableRng};
+
 
 pub struct SneakyMouseServer<'a> {
 	pub redis_con : redis::Connection,
@@ -94,7 +95,7 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 						} else {util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_EXCLUSIVE);}
 					}
 
-
+					let r = server_state.rng.gen_range(time_min..=time_max);
 				}
 
 			} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_ROOM_UID);}
