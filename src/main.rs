@@ -16,10 +16,14 @@ fn server_main() -> Option<bool> {
 	}
 	let con = util::connect_to(&redis_address[..])?;
 
-	let mut server_state = SneakyMouseServer{
+	let mut server_state_mem = SneakyMouseServer{
 		redis_con : con,
-		redis_address : &redis_address[..]
+		redis_address : &redis_address[..],
+		trans_mem : Vec::new(),
+		// xadd_trans_mem : Vec::new(),
 	};
+	let server_state = &mut server_state_mem;
+
 
 	let mut events = event::get_event_list();
 	events.sort_unstable();
@@ -32,17 +36,17 @@ fn server_main() -> Option<bool> {
 			cmd.arg(event);
 		}
 
-		let ids_data = util::auto_retry_cmd(&mut server_state, &cmd)?;
+		let ids_data = util::auto_retry_cmd(server_state, &cmd)?;
 		if let redis::Value::Bulk(ids) = ids_data {
 			for id in ids {
 				match id {
 					redis::Value::Data(id_str) => last_ids.push(id_str),
 					redis::Value::Nil => last_ids.push(config::REDIS_LAST_ID_DEFAULT.as_bytes().to_vec()),
-					_ => panic!("fatal error: redis response does not match expected specification\n")
+					_ => util::mismatch_spec(server_state, file!(), line!())
 				}
 			}
 		} else {
-			panic!("fatal error: redis response does not match expected specification\n");
+			util::mismatch_spec(server_state, file!(), line!())
 		}
 	} else {
 		for _ in events.iter() {
@@ -54,10 +58,10 @@ fn server_main() -> Option<bool> {
 	let mut event_vals_mem = Vec::<&[u8]>::new();
 	let opts = redis::streams::StreamReadOptions::default().count(config::REDIS_STREAM_READ_COUNT).block(config::REDIS_STREAM_TIMEOUT_MS);
 	loop {
-		// let v : redis::Value = redis::Cmd::xadd("debug", "*", &[("key55", "val232")]).query(&mut server_state.redis_con).expect("yolo\n");
+		// let v : redis::Value = redis::Cmd::xadd("debug", "*", &[("key55", "val232")]).query(server_state.redis_con).expect("yolo\n");
 		// print!("{:?}\n", v);
 		let mut cmd = redis::Cmd::xread_options(&events[..], &last_ids[..], &opts);
-		let response : redis::Value = util::auto_retry_cmd(&mut server_state, &mut cmd)?;
+		let response : redis::Value = util::auto_retry_cmd(server_state, &mut cmd)?;
 
 		//NOTE(mami): this code was built upon the principle of non-pesimization; as such there are shorter ways to do this, but most of them are not fast nor robust
 		if let redis::Value::Bulk(stream_responses) = response {
@@ -77,15 +81,15 @@ fn server_main() -> Option<bool> {
 														event_keys.push(&message_key_raw[..]);
 														event_vals.push(&message_val_raw[..]);
 													} else {
-														panic!("fatal error: redis response does not match expected specification\n");
+														util::mismatch_spec(server_state, file!(), line!())
 													}
 												} else {
-													panic!("fatal error: redis response does not match expected specification\n");
+													util::mismatch_spec(server_state, file!(), line!())
 												}
 											}
 											// let stream_name : &str = std::str::from_utf8(stream_name_raw).expect("fatal error: redis returned a non-utf8 stream name; did we misunderstand the specification?");
 
-											event::server_event_received(&mut server_state, &stream_name_raw, message_id_raw, &event_keys[..], &event_vals[..])?;
+											event::server_event_received(server_state, &stream_name_raw, message_id_raw, &event_keys[..], &event_vals[..])?;
 
 
 											let i = events.binary_search(&&stream_name_raw[..]).expect("fatal error: we received an unrecognized event, how did this not get caught until now?");
@@ -98,7 +102,7 @@ fn server_main() -> Option<bool> {
 												let mut cmd = redis::cmd("HMSET");
 												cmd.arg(config::REDIS_LAST_ID_PREFIX).arg(&stream_name_raw).arg(&last_ids[i]);
 
-												if let None = util::auto_retry_cmd::<redis::Value>(&mut server_state, &mut cmd) {
+												if let None = util::auto_retry_cmd::<redis::Value>(server_state, &mut cmd) {
 													print!("the last consumed event was not saved! it had id {}\n", String::from_utf8_lossy(&last_ids[i]));
 													return None;
 												}
@@ -109,23 +113,23 @@ fn server_main() -> Option<bool> {
 											event_keys_mem = unsafe {std::mem::transmute(event_keys)};
 											event_vals_mem = unsafe {std::mem::transmute(event_vals)};
 										} else {
-											panic!("fatal error: redis response does not match expected specification\n");
+											util::mismatch_spec(server_state, file!(), line!())
 										}
 									} else {
-										panic!("fatal error: redis response does not match expected specification\n");
+										util::mismatch_spec(server_state, file!(), line!())
 									}
 								} else {
-									panic!("fatal error: redis response does not match expected specification\n");
+									util::mismatch_spec(server_state, file!(), line!())
 								}
 							}
 						} else {
-							panic!("fatal error: redis response does not match expected specification\n");
+							util::mismatch_spec(server_state, file!(), line!())
 						}
 					} else {
-						panic!("fatal error: redis response does not match expected specification\n");
+						util::mismatch_spec(server_state, file!(), line!())
 					}
 				} else {
-					panic!("fatal error: redis response does not match expected specification\n");
+					util::mismatch_spec(server_state, file!(), line!())
 				}
 			}
 		} else if let redis::Value::Nil = response {

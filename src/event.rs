@@ -1,27 +1,27 @@
 //By Mami
-// use crate::config;
+use crate::config::*;
 use crate::util;
-
 
 pub struct SneakyMouseServer<'a> {
 	pub redis_con : redis::Connection,
 	pub redis_address : &'a str,
+	pub trans_mem : Vec<u8>,
+	// pub xadd_trans_mem : Vec<(&'a[u8], &'a[u8])>,
 }
 
 pub fn get_event_list() -> Vec<&'static [u8]> {
 	//Normally I wouldn't have a function return an allocation, but this is only called once by main to configure itself
 	vec![//this list is considered unordered
-		b"debug:console",
-		b"sm-cheese:request",
-		b"sm-cheese:collected",
-		b"sm-cheese:spawn",
-		b"sm-cheese:promoted",
+		EVENT_DEBUG_CONSOLE,
+		EVENT_CHEESE_REQUEST,
+		EVENT_CHEESE_SPAWN,
 	]
 }
 
 pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<bool> {
+	server_state.trans_mem.clear();
 	match event_name {
-		b"debug:console" => {
+		EVENT_DEBUG_CONSOLE => {
 			print!("debug event: {} <", String::from_utf8_lossy(event_uid));
 			for (i, key) in keys.iter().enumerate() {
 				print!("{}:{}", String::from_utf8_lossy(key), String::from_utf8_lossy(vals[i]));
@@ -32,23 +32,52 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 				}
 			}
 		}
-		b"sm-cheese:request" => {
-			if let Some(userid) = util::find_val("user-id", keys, vals) {
-				if let Some(username) = util::find_val("user-name", keys, vals) {
-					if let Some(stream) = util::find_val("stream", keys, vals) {
-						let uuid = util::lookup_user_uuid(server_state, userid);
+		EVENT_CHEESE_REQUEST => {
+			if let Some(useruid_raw) = util::find_val(FIELD_USER_UID, keys, vals) {
+			if let Some(username) = util::find_val("user-name", keys, vals) {
+			if let Some(room) = util::find_val("room-uid", keys, vals) {
 
+				let uuid = util::lookup_user_uuid(server_state, useruid_raw)?;
+
+				let mut cmd = redis::cmd("HGET");
+				server_state.trans_mem.extend(KEY_USER_PREFIX.as_bytes());
+				util::push_u64(&mut server_state.trans_mem, uuid);
+				cmd.arg(&server_state.trans_mem).arg(KEY_MOUSE_BODY).arg(KEY_MOUSE_HAT);
+
+				if let redis::Value::Bulk(values) = util::auto_retry_cmd(server_state, &mut cmd)? {
+					let mut cmdxadd = redis::cmd("XADD");
+					cmdxadd.arg(EVENT_CHEESE_COLLECT).arg("*");
+					cmdxadd.arg(FIELD_ROOM_UID).arg(room);
+					cmdxadd.arg(FIELD_USER_UID).arg(useruid_raw);
+					cmdxadd.arg(FIELD_USER_NAME).arg(username);
+
+					match &values[0] {
+						redis::Value::Data(body) => {
+							cmdxadd.arg(FIELD_MOUSE_BODY).arg(body);
+						}
+						redis::Value::Nil => {//set the default body
+							cmdxadd.arg(FIELD_MOUSE_BODY).arg(VAL_MOUSE_BODY_DEFAULT);
+							let mut cmdset = redis::Cmd::hset(&server_state.trans_mem, KEY_MOUSE_BODY, VAL_MOUSE_BODY_DEFAULT);
+							let _ : redis::Value = util::auto_retry_cmd(server_state, &mut cmdset)?;
+						}
+						_ => util::mismatch_spec(server_state, file!(), line!())
 					}
+					match &values[1] {
+						redis::Value::Data(hat) => {
+							cmdxadd.arg(FIELD_MOUSE_HAT).arg(hat);
+						}
+						redis::Value::Nil => (),
+						_ => util::mismatch_spec(server_state, file!(), line!())
+					}
+					let _ : redis::Value = util::auto_retry_cmd(server_state, &mut cmdxadd)?;
+				} else {
+					util::mismatch_spec(server_state, file!(), line!());
 				}
-			}
+			} else {util::invalid_event(server_state, event_name, event_uid, keys, vals)?;}
+			} else {util::invalid_event(server_state, event_name, event_uid, keys, vals)?;}
+			} else {util::invalid_event(server_state, event_name, event_uid, keys, vals)?;}
 		}
-		b"sm-cheese:collected" => {
-
-		}
-		b"sm-cheese:spawn" => {
-
-		}
-		b"sm-cheese:promoted" => {
+		EVENT_CHEESE_SPAWN => {
 
 		}
 		_ => {
