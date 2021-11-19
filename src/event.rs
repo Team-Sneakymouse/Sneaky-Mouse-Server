@@ -1,10 +1,13 @@
 //By Mami
+
+use rand_pcg::*;
 use crate::config::*;
 use crate::util;
 
 pub struct SneakyMouseServer<'a> {
 	pub redis_con : redis::Connection,
 	pub redis_address : &'a str,
+	pub rng : Pcg64,
 	pub trans_mem : Vec<u8>,
 	// pub xadd_trans_mem : Vec<(&'a[u8], &'a[u8])>,
 }
@@ -34,8 +37,8 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 		}
 		EVENT_CHEESE_REQUEST => {
 			if let Some(useruid_raw) = util::find_val(FIELD_USER_UID, keys, vals) {
-			if let Some(username) = util::find_val("user-name", keys, vals) {
-			if let Some(room) = util::find_val("room-uid", keys, vals) {
+			if let Some(username) = util::find_val(FIELD_USER_NAME, keys, vals) {
+			if let Some(room) = util::find_val(FIELD_ROOM_UID, keys, vals) {
 
 				let uuid = util::lookup_user_uuid(server_state, useruid_raw)?;
 
@@ -73,12 +76,28 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 				} else {
 					util::mismatch_spec(server_state, file!(), line!());
 				}
-			} else {util::invalid_event(server_state, event_name, event_uid, keys, vals)?;}
-			} else {util::invalid_event(server_state, event_name, event_uid, keys, vals)?;}
-			} else {util::invalid_event(server_state, event_name, event_uid, keys, vals)?;}
+			} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_ROOM_UID);}
+			} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_USER_NAME);}
+			} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_USER_UID);}
 		}
 		EVENT_CHEESE_SPAWN => {
+			if let Some(room) = util::find_val(FIELD_ROOM_UID, keys, vals) {
+				if let Some(cheese_id) = util::find_val(FIELD_CHEESE_ID, keys, vals) {
+					let time_min = util::find_u64_field_or_default(FIELD_TIME_MIN, 0, server_state, event_name, event_uid, keys, vals);
+					let time_max = util::find_u64_field_or_default(FIELD_TIME_MAX, 0, server_state, event_name, event_uid, keys, vals);
+					let size = util::find_u64_field_or_default(FIELD_SIZE, 0, server_state, event_name, event_uid, keys, vals);
+					let mut exclusive : bool = false;
 
+					if let Some(raw) = util::find_val(FIELD_EXCLUSIVE, keys, vals) {
+						if let Some(i) = util::to_bool(raw) {
+							exclusive = i;
+						} else {util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_EXCLUSIVE);}
+					}
+
+
+				}
+
+			} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_ROOM_UID);}
 		}
 		_ => {
 			panic!("fatal error: we received an unrecognized event from redis, '{}', please check the events list\n", String::from_utf8_lossy(event_name));

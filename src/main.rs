@@ -1,11 +1,17 @@
 //By Mami
 #![allow(unused_variables)]
 extern crate redis;
+extern crate getrandom;
+extern crate rand_pcg;
+extern crate rand;
+
 
 mod config;
 mod util;
 mod event;
 use event::SneakyMouseServer;
+use rand::{Rng, RngCore, SeedableRng};
+use rand_pcg::*;
 
 
 fn server_main() -> Option<bool> {
@@ -19,11 +25,10 @@ fn server_main() -> Option<bool> {
 	let mut server_state_mem = SneakyMouseServer{
 		redis_con : con,
 		redis_address : &redis_address[..],
+		rng : Pcg64::from_entropy(),
 		trans_mem : Vec::new(),
-		// xadd_trans_mem : Vec::new(),
 	};
 	let server_state = &mut server_state_mem;
-
 
 	let mut events = event::get_event_list();
 	events.sort_unstable();
@@ -103,7 +108,7 @@ fn server_main() -> Option<bool> {
 												cmd.arg(config::REDIS_LAST_ID_PREFIX).arg(&stream_name_raw).arg(&last_ids[i]);
 
 												if let None = util::auto_retry_cmd::<redis::Value>(server_state, &mut cmd) {
-													print!("the last consumed event was not saved! it had id {}\n", String::from_utf8_lossy(&last_ids[i]));
+													util::send_error(server_state, &format!("the last consumed event was not saved! it had id {}\n", String::from_utf8_lossy(&last_ids[i])));
 													return None;
 												}
 											}

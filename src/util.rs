@@ -11,6 +11,25 @@ pub fn push_u64(mem : &mut Vec<u8>, i : u64) {
 	mem.push(((i%10) as u8) + 48);
 }
 
+pub fn to_u64(mem : &[u8]) -> Option<u64> {//eats leading 0s
+	let mut i : u64 = 0;
+	for c in mem {
+		if *c >= 48u8 && *c <= 48 + 9 {
+			i += (*c - 48) as u64;
+			i *= 10;
+		} else {
+			return None;
+		}
+	}
+	return Some(i);
+}
+pub fn to_bool(mem : &[u8]) -> Option<bool> {//eats leading 0s
+	match mem {
+		b"true" => Some(true),
+		b"false" => Some(false),
+		_ => None,
+	}
+}
 
 pub fn lookup_user_uuid(server_state : &mut SneakyMouseServer, user_identifier : &[u8]) -> Option<u64> {
 	let mut cmd = redis::cmd("HGET");
@@ -40,6 +59,19 @@ pub fn find_val<'a>(key : &str, keys : &[&[u8]], vals : &[&'a[u8]]) -> Option<&'
 		}
 	}
 	return None;
+}
+
+pub fn find_u64_field_or_default(key : &'static str, default : u64, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> u64 {
+	match find_val(key, keys, vals) {
+		Some(raw) => match to_u64(raw) {
+			Some(i) => i,
+			None => {
+				invalid_value(server_state, event_name, event_uid, keys, vals, key);
+				default
+			}
+		}
+		None => default
+	}
 }
 
 // #[derive(Clone, Copy, Debug)]
@@ -95,37 +127,64 @@ pub fn auto_retry_cmd<T : redis::FromRedisValue>(server_state : &mut event::Snea
 	}
 }
 
+pub fn send_error(server_state : &mut SneakyMouseServer, error : &String) {
+	//Unlike all of our other functions, this one will only attempt to send the error to redis once and then move on if it fails
+	let mut cmd = redis::cmd("XADD");
+	cmd.arg(EVENT_DEBUG_ERROR).arg("*");
+	cmd.arg(FIELD_MESSAGE).arg(error);
 
-pub fn invalid_event(server_state : &mut event::SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<bool> {
-	let mut error = format!("invalid event error: name:{} id:{} contents:{{", String::from_utf8_lossy(event_name), String::from_utf8_lossy(event_uid));
+	match cmd.query::<redis::Value>(&mut server_state.redis_con) {
+		Ok(_) => (),
+		Err(error) => match error.kind() {
+			redis::ErrorKind::InvalidClientConfig => {
+				panic!("fatal error: the redis command was invalid {}\n", error);
+			}
+			redis::ErrorKind::TypeError => {
+				panic!("fatal error: TypeError thrown by redis {}\n", error);
+			}
+			_ => {
+				print!("lost connection to the server: {}\n", error);
+				print!("we will not attempt to reconnect\n");
+			}
+		}
+	}
+}
+
+pub fn push_kvs(error : &mut String, keys : &[&[u8]], vals : &[&[u8]]) {
+	error.push_str("{{\n");
 	for (i, key) in keys.iter().enumerate() {
 		error.push_str(&String::from_utf8_lossy(key).into_owned());//TODO: remove this allocation
 		error.push_str(":");
 		error.push_str(&String::from_utf8_lossy(vals[i]).into_owned());
 		if i + 1 == keys.len() {
-			error.push_str(" }}");
+			error.push_str("\n}}");
 		} else {
-			error.push_str(", ");
+			error.push_str(",\n");
 		}
 	}
-	print!("{}\n", error);
+}
 
-	let mut cmdxadd = redis::cmd("XADD");
-	cmdxadd.arg(EVENT_DEBUG_ERROR).arg("*");
-	cmdxadd.arg(FIELD_MESSAGE).arg(&error);
-	let _ : redis::Value = auto_retry_cmd(server_state, &mut cmdxadd)?;
-	Some(true)
+pub fn invalid_value(server_state : &mut event::SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]], field : &'static str) {
+	let mut error = format!("invalid event error: field '{}' had an incorrect value, the event will still be executed with default values, name:{} id:{} contents:", field, String::from_utf8_lossy(event_name), String::from_utf8_lossy(event_uid));
+	push_kvs(&mut error, keys, vals);
+
+	print!("{}\n", error);
+	send_error(server_state, &error);
+}
+
+pub fn missing_field(server_state : &mut event::SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]], field : &'static str) {
+	let mut error = format!("invalid event error: missing critical field '{}', name:{} id:{} contents:", field, String::from_utf8_lossy(event_name), String::from_utf8_lossy(event_uid));
+	push_kvs(&mut error, keys, vals);
+
+	print!("{}\n", error);
+	send_error(server_state, &error);
 }
 
 
 pub fn mismatch_spec(server_state : &mut SneakyMouseServer, file : &'static str, line : u32) {
 	let error = format!("fatal error {} line {}: redis response does not match expected specification, server will shutdown now", file, line);
 
-	let mut cmdxadd = redis::cmd("XADD");
-	cmdxadd.arg(EVENT_DEBUG_ERROR).arg("*");
-	cmdxadd.arg(FIELD_MESSAGE).arg(&error);
-	auto_retry_cmd::<redis::Value>(server_state, &mut cmdxadd);
-
 	print!("{}\n", error);
+	send_error(server_state, &error);
 	panic!("shutting down due to fatal error\n");
 }

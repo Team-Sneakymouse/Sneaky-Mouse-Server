@@ -28,6 +28,11 @@ pub const FIELD_MOUSE_HAT : &str = "hat";
 pub const FIELD_USER_UID : &str = "user-uid";
 pub const FIELD_USER_NAME : &str = "user-name";
 pub const FIELD_ROOM_UID : &str = "room-uid";
+pub const FIELD_CHEESE_ID : &str = "cheese-id";
+pub const FIELD_TIME_MIN : &str = "time-min";
+pub const FIELD_TIME_MAX : &str = "time-max";
+pub const FIELD_EXCLUSIVE : &str = "exclusive";
+pub const FIELD_SIZE : &str = "size";
 
 
 pub const DEBUG_FLOOD_ALL_STREAMS : bool = true;//sets all streams to 0-0 as their last id and disables last id saving
