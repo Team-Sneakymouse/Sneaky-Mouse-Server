@@ -12,6 +12,7 @@ pub fn push_u64(mem : &mut Vec<u8>, i : u64) {
 }
 
 pub fn to_u64(mem : &[u8]) -> Option<u64> {//eats leading 0s
+	if mem.len() > 19 {return None;}
 	let mut i : u64 = 0;
 	for c in mem {
 		if *c >= 48u8 && *c <= 48 + 9 {
@@ -31,6 +32,15 @@ pub fn to_bool(mem : &[u8]) -> Option<bool> {//eats leading 0s
 	}
 }
 
+pub fn get_u64_from_val_or_panic(server_state : &mut SneakyMouseServer, val : &redis::Value) -> u64 {
+	match FromRedisValue::from_redis_value(val) {
+		Ok(uuid) => uuid,
+		Err(_) => {
+			mismatch_spec(server_state, file!(), line!());
+			0//unreachable
+		}
+	}
+}
 pub fn lookup_user_uuid(server_state : &mut SneakyMouseServer, user_identifier : &[u8]) -> Option<u64> {
 	let mut cmd = redis::cmd("HGET");
 	cmd.arg(KEY_USERUUID_HM).arg(user_identifier);
@@ -38,16 +48,13 @@ pub fn lookup_user_uuid(server_state : &mut SneakyMouseServer, user_identifier :
 		Ok(uuid) => Some(uuid),
 		Err(_) => {//assuming that the user does not exist
 			let mut cmd = redis::Cmd::incr(KEY_MAXUUID, 1i32);
-			match FromRedisValue::from_redis_value(&auto_retry_cmd(server_state, &mut cmd)?) {
-				Ok(uuid) => {
-					let mut cmd = redis::cmd("HSET");
-					cmd.arg(KEY_USERUUID_HM).arg(user_identifier).arg(uuid);
-					auto_retry_cmd(server_state, &mut cmd)?;
-					//TODO: set up user profile
-					Some(uuid)
-				}
-				Err(_) => None
-			}
+			let val = &auto_retry_cmd(server_state, &mut cmd)?;
+			let uuid = get_u64_from_val_or_panic(server_state, val);
+			let mut cmd = redis::cmd("HSET");
+			cmd.arg(KEY_USERUUID_HM).arg(user_identifier).arg(uuid);
+			auto_retry_cmd(server_state, &mut cmd)?;
+			//TODO: set up user profile
+			Some(uuid)
 		}
 	}
 }
@@ -61,17 +68,52 @@ pub fn find_val<'a>(key : &str, keys : &[&[u8]], vals : &[&'a[u8]]) -> Option<&'
 	return None;
 }
 
-pub fn find_u64_field_or_default(key : &'static str, default : u64, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> u64 {
+pub fn find_u64_field(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<u64> {
 	match find_val(key, keys, vals) {
 		Some(raw) => match to_u64(raw) {
-			Some(i) => i,
+			Some(i) => Some(i),
 			None => {
 				invalid_value(server_state, event_name, event_uid, keys, vals, key);
-				default
+				None
 			}
 		}
-		None => default
+		None => None
 	}
+}
+
+pub fn get_cheese_data(server_state : &mut SneakyMouseServer, cheese_id : &'static [u8], trans_mem : &mut Vec<u8>) -> Option<(Vec<u8>, bool)> {
+	trans_mem.extend(KEY_CHEESE_DATA_PREFIX.as_bytes());
+	trans_mem.extend(cheese_id);
+	let mut cmdgetdata = redis::cmd("HMGET");
+	cmdgetdata.arg(&trans_mem[..]);
+	cmdgetdata.arg(KEY_CHEESE_IMAGE).arg(KEY_CHEESE_SILENT);
+	trans_mem.clear();
+	if let redis::Value::Bulk(vals) = auto_retry_cmd(server_state, &mut cmdgetdata)? {
+		let image = match vals[0] {
+			redis::Value::Data(image_raw) => image_raw,
+			redis::Value::Nil => Vec::from(VAL_CHEESE_DEFAULT_IMAGE),
+			_ => {
+				mismatch_spec(server_state, file!(), line!());
+				return None;
+			}
+		};
+		let silent = match vals[1] {
+			redis::Value::Data(silent_raw) => match to_bool(&silent_raw) {
+				Some(i) => i,
+				None => {
+					invalid_db_entry(server_state, &trans_mem[..], KEY_CHEESE_IMAGE, &silent_raw);
+					return None;
+				}
+			}
+			redis::Value::Nil => false,
+			_ => {
+				mismatch_spec(server_state, file!(), line!());
+				return None;
+			}
+		};
+		return Some((image, silent));
+	} else {mismatch_spec(server_state, file!(), line!());}
+	return None;
 }
 
 // #[derive(Clone, Copy, Debug)]
@@ -162,6 +204,13 @@ pub fn push_kvs(error : &mut String, keys : &[&[u8]], vals : &[&[u8]]) {
 			error.push_str(",\n");
 		}
 	}
+}
+
+pub fn invalid_db_entry(server_state : &mut event::SneakyMouseServer, key : &[u8], field : &str, val : &[u8]) {
+	let mut error = format!("database error: key '{}:{}' had incorrect value {}, will attempt recovery with default values", String::from_utf8_lossy(key), field, String::from_utf8_lossy(val));
+
+	print!("{}\n", error);
+	send_error(server_state, &error);
 }
 
 pub fn invalid_value(server_state : &mut event::SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]], field : &'static str) {

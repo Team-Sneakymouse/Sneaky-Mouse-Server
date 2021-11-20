@@ -11,6 +11,7 @@ mod util;
 mod event;
 use event::SneakyMouseServer;
 use rand::{Rng, RngCore, SeedableRng};
+use std::time::{Instant, Duration};
 use rand_pcg::*;
 
 
@@ -26,8 +27,8 @@ fn server_main() -> Option<bool> {
 		redis_con : con,
 		redis_address : &redis_address[..],
 		rng : Pcg64::from_entropy(),
-		trans_mem : Vec::new(),
 	};
+	let mut trans_mem = Vec::new();
 	let server_state = &mut server_state_mem;
 
 	let mut events = event::get_event_list();
@@ -59,16 +60,26 @@ fn server_main() -> Option<bool> {
 		}
 	}
 
+	let mut last_time = Instant::now();
+
 	let mut event_keys_mem = Vec::<&[u8]>::new();
 	let mut event_vals_mem = Vec::<&[u8]>::new();
-	let opts = redis::streams::StreamReadOptions::default().count(config::REDIS_STREAM_READ_COUNT).block(config::REDIS_STREAM_TIMEOUT_MS);
+	let opts = redis::streams::StreamReadOptions::default().count(config::REDIS_STREAM_READ_COUNT);
 	loop {
-		// let v : redis::Value = redis::Cmd::xadd("debug", "*", &[("key55", "val232")]).query(server_state.redis_con).expect("yolo\n");
-		// print!("{:?}\n", v);
+		let mut cur_time = Instant::now();
+		let delta : f64 = match cur_time.checked_duration_since(last_time) {
+			Some(dur) => dur.as_secs_f64(),
+			None => 0.0,
+		};
+		last_time = cur_time;
+		let timeout = event::server_update(server_state, &mut trans_mem, delta)?;
+
+		opts.block((timeout*1000.0) as usize);
+
 		let mut cmd = redis::Cmd::xread_options(&events[..], &last_ids[..], &opts);
 		let response : redis::Value = util::auto_retry_cmd(server_state, &mut cmd)?;
 
-		//NOTE(mami): this code was built upon the principle of non-pesimization; as such there are shorter ways to do this, but most of them are not fast nor robust
+
 		if let redis::Value::Bulk(stream_responses) = response {
 			for stream_response_data in stream_responses {
 				if let redis::Value::Bulk(stream_response) = stream_response_data {
@@ -94,7 +105,7 @@ fn server_main() -> Option<bool> {
 											}
 											// let stream_name : &str = std::str::from_utf8(stream_name_raw).expect("fatal error: redis returned a non-utf8 stream name; did we misunderstand the specification?");
 
-											event::server_event_received(server_state, &stream_name_raw, message_id_raw, &event_keys[..], &event_vals[..])?;
+											event::server_event_received(server_state, &stream_name_raw, message_id_raw, &event_keys[..], &event_vals[..], &mut trans_mem)?;
 
 
 											let i = events.binary_search(&&stream_name_raw[..]).expect("fatal error: we received an unrecognized event, how did this not get caught until now?");
