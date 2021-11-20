@@ -81,73 +81,60 @@ fn server_main() -> Option<bool> {
 
 
 		if let redis::Value::Bulk(stream_responses) = response {
-			for stream_response_data in stream_responses {
-				if let redis::Value::Bulk(stream_response) = stream_response_data {
-					if let redis::Value::Data(stream_name_raw) = &stream_response[0] {
-						if let redis::Value::Bulk(stream_messages) = &stream_response[1] {
-							for message_data in stream_messages {
-								if let redis::Value::Bulk(message) = message_data {
-									if let redis::Value::Data(message_id_raw) = &message[0] {
-										if let redis::Value::Bulk(message_body) = &message[1] {
-											let mut event_keys = event_keys_mem;
-											let mut event_vals = event_vals_mem;
-											for i in 0..message_body.len()/2 {
-												if let redis::Value::Data(message_key_raw) = &message_body[i] {
-													if let redis::Value::Data(message_val_raw) = &message_body[i + 1] {
-														event_keys.push(&message_key_raw[..]);
-														event_vals.push(&message_val_raw[..]);
-													} else {
-														util::mismatch_spec(server_state, file!(), line!())
-													}
-												} else {
-													util::mismatch_spec(server_state, file!(), line!())
-												}
-											}
-											// let stream_name : &str = std::str::from_utf8(stream_name_raw).expect("fatal error: redis returned a non-utf8 stream name; did we misunderstand the specification?");
+		for stream_response_data in stream_responses {
+			if let redis::Value::Bulk(stream_response) = stream_response_data {
+			if let redis::Value::Data(stream_name_raw) = &stream_response[0] {
+			if let redis::Value::Bulk(stream_messages) = &stream_response[1] {
+			for message_data in stream_messages {
+				if let redis::Value::Bulk(message) = message_data {
+				if let redis::Value::Data(message_id_raw) = &message[0] {
+				if let redis::Value::Bulk(message_body) = &message[1] {
 
-											event::server_event_received(server_state, &stream_name_raw, message_id_raw, &event_keys[..], &event_vals[..], &mut trans_mem)?;
-
-
-											let i = events.binary_search(&&stream_name_raw[..]).expect("fatal error: we received an unrecognized event, how did this not get caught until now?");
-
-
-											last_ids[i].clear();
-											last_ids[i].extend(&message_id_raw[..]);//this avoids allocating
-
-											if !config::DEBUG_FLOOD_ALL_STREAMS {
-												let mut cmd = redis::cmd("HMSET");
-												cmd.arg(config::REDIS_LAST_ID_PREFIX).arg(&stream_name_raw).arg(&last_ids[i]);
-
-												if let None = util::auto_retry_cmd::<redis::Value>(server_state, &mut cmd) {
-													util::send_error(server_state, &format!("the last consumed event was not saved! it had id {}\n", String::from_utf8_lossy(&last_ids[i])));
-													return None;
-												}
-											}
-											//the borrow checker does not acknowledge that .clear() drops all borrowed references, so we have to force it to
-											event_keys.clear();
-											event_vals.clear();
-											event_keys_mem = unsafe {std::mem::transmute(event_keys)};
-											event_vals_mem = unsafe {std::mem::transmute(event_vals)};
-										} else {
-											util::mismatch_spec(server_state, file!(), line!())
-										}
-									} else {
-										util::mismatch_spec(server_state, file!(), line!())
-									}
-								} else {
-									util::mismatch_spec(server_state, file!(), line!())
-								}
-							}
+				let mut event_keys = event_keys_mem;
+				let mut event_vals = event_vals_mem;
+				for i in 0..message_body.len()/2 {
+					if let redis::Value::Data(message_key_raw) = &message_body[i] {
+						if let redis::Value::Data(message_val_raw) = &message_body[i + 1] {
+							event_keys.push(&message_key_raw[..]);
+							event_vals.push(&message_val_raw[..]);
 						} else {
 							util::mismatch_spec(server_state, file!(), line!())
 						}
 					} else {
 						util::mismatch_spec(server_state, file!(), line!())
 					}
-				} else {
-					util::mismatch_spec(server_state, file!(), line!())
 				}
+
+				let i = events.binary_search(&&stream_name_raw[..]).expect("fatal error: we received an unrecognized event, how did this not get caught until now?");
+
+				last_ids[i].clear();
+				last_ids[i].extend(&message_id_raw[..]);//this avoids allocating
+
+				if !config::DEBUG_FLOOD_ALL_STREAMS {
+					let mut cmd = redis::cmd("HMSET");
+					cmd.arg(config::REDIS_LAST_ID_PREFIX).arg(&stream_name_raw).arg(&last_ids[i]);
+
+					if let None = util::auto_retry_cmd::<redis::Value>(server_state, &mut cmd) {
+						util::send_error(server_state, &format!("the last consumed event was not saved! it had id {}\n", String::from_utf8_lossy(&last_ids[i])));
+						return None;
+					}
+				}
+
+				event::server_event_received(server_state, &stream_name_raw, message_id_raw, &event_keys[..], &event_vals[..], &mut trans_mem)?;
+				//the borrow checker does not acknowledge that .clear() drops all borrowed references, so we have to force it to
+				event_keys.clear();
+				event_vals.clear();
+				event_keys_mem = unsafe {std::mem::transmute(event_keys)};
+				event_vals_mem = unsafe {std::mem::transmute(event_vals)};
+
+				} else {util::mismatch_spec(server_state, file!(), line!())}
+				} else {util::mismatch_spec(server_state, file!(), line!())}
+				} else {util::mismatch_spec(server_state, file!(), line!())}
 			}
+			} else {util::mismatch_spec(server_state, file!(), line!())}
+			} else {util::mismatch_spec(server_state, file!(), line!())}
+			} else {util::mismatch_spec(server_state, file!(), line!())}
+		}
 		} else if let redis::Value::Nil = response {
 			print!("no events received before timeout: trying again...\n");
 		}
