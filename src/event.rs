@@ -90,189 +90,142 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 		}
 		EVENT_CHEESE_SPAWN => {
 			if let Some(room) = util::find_val(FIELD_ROOM_UID, keys, vals) {
-			if let Some(cheese_id_raw) = util::find_val(FIELD_CHEESE_ID, keys, vals) {
-
-			let cheese_id : &'static [u8] = match cheese_id_raw {
-				_ => CHEESE_DEFAULT,
-			};
+			if let Some(cheese_id) = util::find_val(FIELD_CHEESE_ID, keys, vals) {
 
 			let mut cheese_uid = u64::MAX;
-			let mut cheese_i = 0;
-			for (i, server_room) in server_state.cheese_rooms.iter().enumerate() {
-				if server_room == room {
-					if server_state.cheese_ids[i] == cheese_id {
-						cheese_uid = server_state.cheese_uids[i];
-						cheese_i = i;
-					}
+			for (i, cur_cheese_id) in server_state.cheese_ids.iter().enumerate() {
+				if cur_cheese_id == &cheese_id && server_state.cheese_rooms[i] == room {
+					cheese_uid = server_state.cheese_uids[i];
 					break;
 				}
 			}
-			let time_max = util::find_u64_field(FIELD_TIME_MAX, server_state, event_name, event_uid, keys, vals).unwrap_or(u64::MAX);
-			let time_min = util::find_u64_field(FIELD_TIME_MIN, server_state, event_name, event_uid, keys, vals).unwrap_or(u64::MAX);
 
-			if cheese_uid == u64::MAX {//set cheese to room
-				let size = util::find_u64_field(FIELD_SIZE, server_state, event_name, event_uid, keys, vals).unwrap_or(1);
-				let mut exclusive : bool = false;
+			let cheese;
+			if cheese_uid == u64::MAX {
+				cheese = util::get_cheese_from_uid(server_state, cheese_uid, trans_mem)?;
+			} else {
+				cheese = util::get_cheese_from_id(server_state, cheese_id, trans_mem)?;
+			}
 
-				if let Some(raw) = util::find_val(FIELD_EXCLUSIVE, keys, vals) {
-					if let Some(i) = util::to_bool(raw) {
-						exclusive = i;
-					} else {util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_EXCLUSIVE);}
-				}
-
-				let mut time_out;
-				if time_min == u64::MAX || time_max == time_min {
-					time_out = time_max;
-				} else if time_max == u64::MAX  {
-					time_out = time_min;
-				} else if time_max < time_min {
-					util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_TIME_MIN);
-					time_out = time_max;
-				} else {
-					time_out = server_state.rng.gen_range(time_min..=time_max);
-				}
-				time_out = u64::min(time_out, (VAL_CHEESE_MAX_TTL_S*1000) as u64);
-
-				let (image, silent) = util::get_cheese_data(server_state, cheese_id, trans_mem)?;
-
-				let mut cmdgetuid = redis::Cmd::incr(KEY_CHEESE_UID_MAX, 1i32);
-				let val = &util::auto_retry_cmd(server_state, &mut cmdgetuid)?;
-				cheese_uid = util::get_u64_from_val_or_panic(server_state, val);
-
-				let mut cmdhset = redis::cmd("HMSET");
-				trans_mem.extend(KEY_CHEESE_PREFIX.as_bytes());
-				util::push_u64(trans_mem, cheese_uid);
-				cmdhset.arg(&trans_mem[..]);
-
-				let mut cmdex = redis::Cmd::expire(&trans_mem[..], VAL_CHEESE_MAX_TTL_S);
-				trans_mem.clear();
-
-				let mut cmdxadd = redis::cmd("XADD");
-				cmdxadd.arg(EVENT_CHEESE_UPDATE).arg("*");
-				cmdxadd.arg(FIELD_CHEESE_UID).arg(cheese_uid);
-
-				cmdhset.arg(FIELD_ROOM_UID).arg(room);
-				cmdxadd.arg(FIELD_ROOM_UID).arg(room);
-
-				cmdxadd.arg(FIELD_IMAGE).arg(image);
-				if size > 1 {
-					cmdhset.arg(FIELD_SIZE).arg(size);
-					cmdxadd.arg(FIELD_SIZE).arg(size);
-				}
-				if silent {
-					cmdhset.arg(FIELD_SILENT).arg(silent);
-					cmdxadd.arg(FIELD_SILENT).arg(silent);
-				}
-				if exclusive {
-					cmdhset.arg(FIELD_EXCLUSIVE).arg(exclusive);
-					cmdxadd.arg(FIELD_EXCLUSIVE).arg(exclusive);
-				}
-
-				server_state.cheese_timeouts.push((time_out as f64)/1000.0);
-				server_state.cheese_uids.push(cheese_uid);
-				server_state.cheese_rooms.push(Vec::from(room));
-				server_state.cheese_ids.push(&cheese_id);
-
-				util::auto_retry_cmd(server_state, &mut cmdhset)?;
-				util::auto_retry_cmd(server_state, &mut cmdex)?;
-				util::auto_retry_cmd(server_state, &mut cmdxadd)?;
-			} else {//augment current cheese
-				let size = util::find_u64_field(FIELD_SIZE, server_state, event_name, event_uid, keys, vals);
-				let mut exclusive : Option<bool> = None;
-
-				if let Some(raw) = util::find_val(FIELD_EXCLUSIVE, keys, vals) {
-					if let Some(i) = util::to_bool(raw) {
-						exclusive = Some(i);
-					} else {util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_EXCLUSIVE);}
-				}
-
-				let (image, silent) = util::get_cheese_data(server_state, cheese_id, trans_mem)?;
-
-				let mut cmdxadd = redis::cmd("XADD");
-				cmdxadd.arg(EVENT_CHEESE_UPDATE).arg("*");
-				cmdxadd.arg(FIELD_CHEESE_UID).arg(cheese_uid);
-
-				let mut cmdhget = redis::cmd("HMGET");
-				let mut cmdhset = redis::cmd("HMSET");
-				trans_mem.extend(KEY_CHEESE_PREFIX.as_bytes());
-				util::push_u64(trans_mem, cheese_uid);
-				cmdhget.arg(&trans_mem[..]);
-				cmdhset.arg(&trans_mem[..]);
-				trans_mem.clear();
-				let flag = false;
-				cmdhget.arg(FIELD_SIZE);
-				cmdhget.arg(FIELD_SILENT);
-				if let None = exclusive {
-					cmdhget.arg(FIELD_EXCLUSIVE);
-				}
-
-				match util::auto_retry_cmd(server_state, &mut cmdhget)? {
-					redis::Value::Bulk(values) => {
-						if values.len() != 3 {util::mismatch_spec(server_state, file!(), line!());}
-
-						if let Some(v) = size {
-							let new_size = v;
-							if let redis::Value::Data(size_raw) = values[0] {
-								if let Some(pre_size) = util::to_u64(&size_raw) {
-									new_size += pre_size;
-								} else {util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_SIZE);}
-							}
-							cmdxadd.arg(FIELD_SIZE).arg(new_size);
-							cmdhset.arg(FIELD_SIZE).arg(new_size);
-							flag = true;
-						} else {
-							if let redis::Value::Data(size_raw) = values[0] {
-								cmdxadd.arg(FIELD_SIZE).arg(size_raw);
-							}
-						}
-						if let redis::Value::Data(exclusive_raw) = values[1] {
-							cmdxadd.arg(FIELD_EXCLUSIVE).arg(exclusive_raw);
-						}
-						if let Some(v) = exclusive {
-							cmdxadd.arg(FIELD_EXCLUSIVE).arg(v);
-							cmdhset.arg(FIELD_SIZE).arg(v);
-							flag = true;
-						} else {
-							if let redis::Value::Data(silent_raw) = values[2] {
-								cmdxadd.arg(FIELD_SILENT).arg(silent_raw);
-							} else if silent {
-								cmdxadd.arg(FIELD_SILENT).arg(silent);
-							}
-						}
+			if let Some(time_min) = util::find_u32_field(FIELD_TIME_MIN, server_state, event_name, event_uid, keys, vals) {
+				if let Some(time_max) = util::find_u32_field(FIELD_TIME_MAX, server_state, event_name, event_uid, keys, vals) {
+					cheese.time_min = time_min;
+					cheese.time_max = time_max;
+					if time_min > time_max {
+						util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_TIME_MIN);
+						cheese.time_min = time_max;
 					}
-					_ => {util::mismatch_spec(server_state, file!(), line!());}
-				}
-
-				let mut time_out;
-				if time_min == u64::MAX || time_max == time_min {
-					time_out = time_max;
-				} else if time_max == u64::MAX  {
-					time_out = time_min;
-				} else if time_max < time_min {
-					util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_TIME_MIN);
-					time_out = time_max;
 				} else {
-					time_out = server_state.rng.gen_range(time_min..=time_max);
+					cheese.time_min = time_min;
+					cheese.time_max = time_min;
 				}
-				if time_out != u64::MAX {
-					time_out = u64::min(time_out, (VAL_CHEESE_MAX_TTL_S*1000) as u64);
-					server_state.cheese_timeouts[cheese_i] = server_state.cur_time + (time_out as f64)/1000.0;
-				}
+			} else if let Some(time_max) = util::find_u32_field(FIELD_TIME_MAX, server_state, event_name, event_uid, keys, vals) {
+				cheese.time_min = time_max;
+				cheese.time_max = time_max;
+			}
 
-				if flag {
-					util::auto_retry_cmd(server_state, &mut cmdhset)?;
-				}
-				util::auto_retry_cmd(server_state, &mut cmdxadd)?;
+			cheese.size = util::find_i32_field(FIELD_SIZE, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.size);
+			if cheese.original_size == 0 {
+				cheese.original_size = cheese.size;
+			}
+			cheese.silent = util::find_bool_field(FIELD_SILENT, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.silent);
+			cheese.exclusive = util::find_bool_field(FIELD_EXCLUSIVE, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.exclusive);
 
-				}
-				} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_CHEESE_ID);}
+			cheese.image = util::find_data_field(FIELD_IMAGE, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.image);
+			cheese.radicalizes = util::find_data_field(FIELD_RADICALIZES, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.radicalizes);
+
+			//TODO: handle overflows (rust error handling forces me to use it to do this)
+			if let Some(m) = util::find_f32_field(FIELD_SIZE_MULT, server_state, event_name, event_uid, keys, vals) {
+				cheese.size *= m;
+			}
+			cheese.size += util::find_u32_field(FIELD_SIZE_INCR, server_state, event_name, event_uid, keys, vals).unwrap_or(0);
+
+			let mut cmdgetuid = redis::Cmd::incr(KEY_CHEESE_UID_MAX, 1i32);
+			let val = &util::auto_retry_cmd(server_state, &mut cmdgetuid)?;
+
+			let cheese_uid = util::get_u64_from_val_or_panic(server_state, val);
+
+			let mut cmdhset = redis::cmd("HMSET");
+			trans_mem.extend(KEY_CHEESE_PREFIX.as_bytes());
+			util::push_u64(trans_mem, cheese_uid);
+			cmdhset.arg(&trans_mem[..]);
+
+			let mut cmdex = redis::Cmd::expire(&trans_mem[..], VAL_CHEESE_MAX_TTL as usize);
+			trans_mem.clear();
+
+			let mut cmdxadd = redis::cmd("XADD");
+			cmdxadd.arg(EVENT_CHEESE_UPDATE).arg("*");
+			cmdxadd.arg(FIELD_CHEESE_UID).arg(cheese_uid);
+			cmdxadd.arg(FIELD_TRIGGER).arg(event_uid);
+
+			//cmdhset.arg(FIELD_ROOM_UID).arg(room);//invert this to point at the cheese_uid
+			cmdxadd.arg(FIELD_ROOM_UID).arg(room);
+
+			util::save_cheese(server_state, &mut cmdhset, &cheese);
+			util::send_cheese_to_overlay(server_state, &mut cmdxadd, &cheese);
+
+			let time_out_ms = server_state.rng.gen_range(cheese.time_min..=cheese.time_max);
+			let time_out = f64::min((time_out_ms as f64)/1000.0, VAL_CHEESE_MAX_TTL - 5.0);
+
+			server_state.cheese_timeouts.push(time_out);
+			server_state.cheese_uids.push(cheese_uid);
+			server_state.cheese_rooms.push(Vec::from(room));
+			server_state.cheese_ids.push(cheese_id);
+
+			util::auto_retry_cmd(server_state, &mut cmdhset)?;
+			util::auto_retry_cmd(server_state, &mut cmdex)?;
+			util::auto_retry_cmd(server_state, &mut cmdxadd)?;
+
+			} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_CHEESE_ID);}
 			} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_ROOM_UID);}
 		}
 		EVENT_CHEESE_COLLECTED => {
+			if let Some(cheese_uid_raw) = util::find_val(FIELD_CHEESE_UID, keys, vals) {
+			if let Some(useruid_raw) = util::find_val(FIELD_USER_UID, keys, vals) {
 
+			let uuid = util::lookup_user_uuid(server_state, useruid_raw)?;
+
+			let cheese = match util::to_u64(cheese_uid_raw) {
+				Some(cheese_uid) => util::get_cheese_from_uid(server_state, cheese_uid, trans_mem)?,
+				_ => {
+					util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_CHEESE_UID);
+					generate_default_cheese()
+				}
+			};
+
+			trans_mem.extend(KEY_USER_PREFIX.as_bytes());
+			util::push_u64(trans_mem, uuid);
+			
+			if cheese.squirrel_mult > 0.0 {
+				let mut cmdget = redis::Cmd::hget(&trans_mem[..], FIELD_CHEESE_TOTAL);
+	
+				let val : redis::Value = util::auto_retry_cmd(server_state, &mut cmdget)?;
+				if let redis::Value::Data(data) = val {
+				if let Some(user_cheese) = util::to_i64(&data[..]) {
+				
+				user_cheese += ((user_cheese as f64)*(cheese.squirrel_mult as f64)) as i64;
+				user_cheese += (cheese.size as i64);
+
+				let mut cmdset = redis::Cmd::hset(&trans_mem[..], FIELD_CHEESE_TOTAL, user_cheese);
+				
+				util::auto_retry_cmd(server_state, &mut cmdset)?;
+
+				} else {util::invalid_db_entry(server_state, &&trans_mem[..], FIELD_CHEESE_TOTAL, &data[..])}
+				} else {util::mismatch_spec(server_state, file!(), line!())}
+			} else if cheese.size > 0 {
+				//TODO: what if increment fails?
+				let mut cmdincr = redis::Cmd::hincr(&trans_mem[..], FIELD_CHEESE_TOTAL, cheese.size);
+	
+				util::auto_retry_cmd(server_state, &mut cmdincr)?;
+			}
+			trans_mem.clear();
+
+			} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_USER_UID);}
+			} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_CHEESE_UID);}
 		}
 		EVENT_SHUTDOWN => {
 			print!("shutdown request acknowledged, closing the server\n");
+			//TODO: pipeline this above all else, a slow closing server is unacceptable
 
 			for room in server_state.cheese_rooms {
 
@@ -304,9 +257,27 @@ pub fn server_update(server_state : &mut SneakyMouseServer, trans_mem : &mut Vec
 			let room = server_state.cheese_rooms.swap_remove(i);
 			server_state.cheese_ids.swap_remove(i);
 
+			let cheese = util::get_cheese_data_from_uid(server_state, cheese_uid, trans_mem);
+
 			let mut cmdxadd = redis::cmd("XADD");
 			cmdxadd.arg(EVENT_CHEESE_UPDATE).arg("*");
 			cmdxadd.arg(FIELD_ROOM_UID).arg(room);
+
+			if let Some(radical) = cheese.radicalizes {
+				cheese.image = radical;
+				cheese.exclusive = true;
+				cheese.size *= CHEESE_RADICAL_MULT;
+				cheese.squirrel_mult *= CHEESE_RADICAL_MULT;
+
+				let mut cmdhset = redis::cmd("HMSET");
+				trans_mem.extend(KEY_CHEESE_PREFIX.as_bytes());
+				util::push_u64(trans_mem, cheese_uid);
+				cmdhset.arg(&trans_mem[..]);
+				trans_mem.clear();
+
+				util::save_cheese(server_state, &mut cmdhset, &cheese);
+				util::send_cheese_to_overlay(server_state, &mut cmdxadd, &cheese);
+			}
 
 			util::auto_retry_cmd(server_state, &mut cmdxadd)?;
 		} else {

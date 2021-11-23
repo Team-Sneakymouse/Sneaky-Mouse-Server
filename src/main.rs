@@ -1,5 +1,6 @@
 //By Mami
 #![allow(unused_variables)]
+#![allow(unused_parens)]//why tf is this a default warning
 extern crate redis;
 extern crate getrandom;
 extern crate rand_pcg;
