@@ -26,7 +26,7 @@ pub fn generate_default_cheese() -> CheeseData {
 }
 
 pub const REDIS_STREAM_READ_COUNT : usize = 55;
-pub const REDIS_STREAM_TIMEOUT_MAX : f64 = 3.0;
+pub const REDIS_STREAM_TIMEOUT_MAX : f64 = 5.0;
 pub const REDIS_TIME_BETWEEN_RETRY_CON : u64 = 5;
 pub const REDIS_RETRY_CON_MAX_ATTEMPTS : i32 = 5;
 
@@ -38,15 +38,13 @@ pub const KEY_MAXUUID : &str = "user-uuid-max";
 pub const KEY_CHEESE_UID_MAX : &str = "cheese-uid-max";
 pub const KEY_CHEESE_PREFIX : &str = "cheese:";
 pub const KEY_CHEESE_DATA_PREFIX : &str = "cheese-temp:";
-pub const KEY_CHEESE_IMAGE : &str = "image";
-pub const KEY_CHEESE_SILENT : &str = "silent";
 pub const KEY_USER_PREFIX : &str = "user:";
 pub const KEY_MOUSE_BODY : &str = "mouse:body";
 pub const KEY_MOUSE_HAT : &str = "mouse:hat";
 
 pub const VAL_MOUSE_BODY_DEFAULT : &str = "danipls";
-pub const VAL_CHEESE_DEFAULT_IMAGE : &[u8] = b"danipls";
 pub const VAL_CHEESE_MAX_TTL : f64 = 5.0*60.0*60.0;
+pub const VAL_NULL : &str = "null";
 // pub const VAL_TRUE : &str = "true";
 // pub const VAL_FALSE : &str = "false";
 
@@ -84,13 +82,8 @@ pub const FIELD_SIZE_MULT : &str = "size-mult";
 pub const FIELD_SIZE_INCR : &str = "size-add";
 
 
-pub const CHEESE_SIZE_MAX : u32 = 555_555_555;
-
-pub const CHEESE_MAX_CONCURRENT : usize = 555;
-pub const CHEESE_FLAG_SILENT : u64 = 1;
-pub const CHEESE_FLAG_EXCLUSIVE : u64 = 2;
-pub const CHEESE_DEFAULT : &[u8] = b"cheese";
+pub const CHEESE_SIZE_MAX : i32 = 555_555_555;
 pub const CHEESE_RADICAL_MULT : f32 = 1.1;
 
 
-pub const DEBUG_FLOOD_ALL_STREAMS : bool = true;//sets all streams to 0-0 as their last id and disables last id saving
+pub const DEBUG_FLOOD_ALL_STREAMS : bool = false;//sets all streams to 0-0 as their last id and disables last id saving

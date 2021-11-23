@@ -15,8 +15,8 @@ pub fn to_u64(mem : &[u8]) -> Option<u64> {//eats leading 0s
 	let mut i : u64 = 0;
 	for c in mem {
 		if *c >= 48u8 && *c <= 48 + 9 {
-			i = u64::saturating_add(i, (*c - 48) as u64);
 			i = u64::saturating_mul(i, 10);
+			i = u64::saturating_add(i, (*c - 48) as u64);
 		} else {
 			return None;
 		}
@@ -28,8 +28,8 @@ pub fn to_u32(mem : &[u8]) -> Option<u32> {//eats leading 0s
 	let mut i : u32 = 0;
 	for c in mem {
 		if *c >= 48u8 && *c <= 48 + 9 {
-			i = u32::saturating_add(i, (*c - 48) as u32);
 			i = u32::saturating_mul(i, 10);
+			i = u32::saturating_add(i, (*c - 48) as u32);
 		} else {
 			return None;
 		}
@@ -41,8 +41,8 @@ pub fn to_i64(mem : &[u8]) -> Option<i64> {//eats leading 0s
 	let s = if mem[0] == 45 {1} else {0};
 	for c in &mem[s..] {
 		if *c >= 48u8 && *c <= 48 + 9 {
-			i = i64::saturating_add(i, (*c - 48) as i64);
 			i = i64::saturating_mul(i, 10);
+			i = i64::saturating_add(i, (*c - 48) as i64);
 		} else {
 			return None;
 		}
@@ -58,8 +58,8 @@ pub fn to_i32(mem : &[u8]) -> Option<i32> {//eats leading 0s
 	let s = if mem[0] == 45 {1} else {0};
 	for c in &mem[s..] {
 		if *c >= 48u8 && *c <= 48 + 9 {
-			i = i32::saturating_add(i, (*c - 48) as i32);
 			i = i32::saturating_mul(i, 10);
+			i = i32::saturating_add(i, (*c - 48) as i32);
 		} else {
 			return None;
 		}
@@ -187,6 +187,8 @@ pub fn save_cheese(server_state : &mut SneakyMouseServer, cmd : &mut redis::Cmd,
 	cmd.arg(FIELD_IMAGE).arg(&cheese.image);
 	if let Some(s) = &cheese.radicalizes {
 		cmd.arg(FIELD_RADICALIZES).arg(s);
+	} else {
+		cmd.arg(FIELD_RADICALIZES).arg(VAL_NULL);
 	}
 	cmd.arg(FIELD_TIME_MIN).arg(cheese.time_min);
 	cmd.arg(FIELD_TIME_MAX).arg(cheese.time_max);
@@ -205,7 +207,8 @@ fn _get_cheese_from_val(server_state : &mut SneakyMouseServer, cheese_val : redi
 	
 	if vals.len()%2 == 1 {mismatch_spec(server_state, file!(), line!());}
 	let mut has_set_time = false;
-	for i in 0..vals.len()/2 {
+	for i2 in 0..vals.len()/2 {
+		let i = i2*2;
 		if let redis::Value::Data(field) = &vals[i] {
 		if let redis::Value::Data(val) = &vals[i + 1] {
 		

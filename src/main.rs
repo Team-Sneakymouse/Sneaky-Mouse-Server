@@ -68,8 +68,8 @@ fn server_main() -> Option<bool> {
 
 	let mut last_time = Instant::now();
 
-	let mut event_keys_mem = Vec::<&[u8]>::new();
-	let mut event_vals_mem = Vec::<&[u8]>::new();
+	let mut event_keys_mem : Vec<&[u8]> = Vec::<&[u8]>::new();
+	let mut event_vals_mem : Vec<&[u8]> = Vec::<&[u8]>::new();
 	loop {
 		let cur_time = Instant::now();
 		let delta : f64 = match cur_time.checked_duration_since(last_time) {
@@ -97,17 +97,18 @@ fn server_main() -> Option<bool> {
 
 				let mut event_keys = event_keys_mem;
 				let mut event_vals = event_vals_mem;
-				for i in 0..message_body.len()/2 {
+				for i2 in 0..message_body.len()/2 {
+					let i = i2*2;
 					if let redis::Value::Data(message_key_raw) = &message_body[i] {
-						if let redis::Value::Data(message_val_raw) = &message_body[i + 1] {
-							event_keys.push(&message_key_raw[..]);
-							event_vals.push(&message_val_raw[..]);
-						} else {
-							util::mismatch_spec(server_state, file!(), line!())
-						}
-					} else {
-						util::mismatch_spec(server_state, file!(), line!())
-					}
+					if let redis::Value::Data(message_val_raw) = &message_body[i + 1] {
+
+					let k = &message_key_raw[..];
+					let v = &message_val_raw[..];
+					event_keys.push(k);
+					event_vals.push(v);
+
+					} else {util::mismatch_spec(server_state, file!(), line!())}
+					} else {util::mismatch_spec(server_state, file!(), line!())}
 				}
 
 				let i = events.binary_search(&&stream_name_raw[..]).expect("fatal error: we received an unrecognized event, how did this not get caught until now?");
