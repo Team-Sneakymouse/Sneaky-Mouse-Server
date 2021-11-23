@@ -2,7 +2,7 @@
 use rand_pcg::*;
 use crate::config::*;
 use crate::util;
-use rand::{Rng, RngCore, SeedableRng};
+use rand::{Rng};
 
 
 pub struct SneakyMouseServer<'a> {
@@ -10,11 +10,10 @@ pub struct SneakyMouseServer<'a> {
 	pub redis_address : &'a str,
 	pub rng : Pcg64,
 	pub cur_time : f64,
-	pub next_timeout : f64,
 	pub cheese_timeouts : Vec<f64>,
 	pub cheese_uids : Vec<u64>,
 	pub cheese_rooms : Vec<Vec<u8>>,//I don't like this
-	pub cheese_ids : Vec<&'static [u8]>,
+	pub cheese_ids : Vec<u64>,//hashes
 	// pub xadd_trans_mem : Vec<(&'a[u8], &'a[u8])>,
 }
 
@@ -92,15 +91,22 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 			if let Some(room) = util::find_val(FIELD_ROOM_UID, keys, vals) {
 			if let Some(cheese_id) = util::find_val(FIELD_CHEESE_ID, keys, vals) {
 
+			use std::collections::hash_map::DefaultHasher;
+			use std::hash::{Hash, Hasher};
+			
+			let mut hasher = DefaultHasher::new();
+			Hash::hash_slice(cheese_id, &mut hasher);
+			let cheese_id_hash = hasher.finish();
+
 			let mut cheese_uid = u64::MAX;
 			for (i, cur_cheese_id) in server_state.cheese_ids.iter().enumerate() {
-				if cur_cheese_id == &cheese_id && server_state.cheese_rooms[i] == room {
+				if *cur_cheese_id == cheese_id_hash && server_state.cheese_rooms[i] == room {
 					cheese_uid = server_state.cheese_uids[i];
 					break;
 				}
 			}
 
-			let cheese;
+			let mut cheese;
 			if cheese_uid == u64::MAX {
 				cheese = util::get_cheese_from_uid(server_state, cheese_uid, trans_mem)?;
 			} else {
@@ -132,15 +138,17 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 			cheese.exclusive = util::find_bool_field(FIELD_EXCLUSIVE, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.exclusive);
 
 			cheese.image = util::find_data_field(FIELD_IMAGE, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.image);
-			cheese.radicalizes = util::find_data_field(FIELD_RADICALIZES, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.radicalizes);
+			if let Some(s) = util::find_data_field(FIELD_RADICALIZES, server_state, event_name, event_uid, keys, vals) {
+				cheese.radicalizes = Some(s);
+			}
 
 			//TODO: handle overflows (rust error handling forces me to use it to do this)
 			if let Some(m) = util::find_f32_field(FIELD_SIZE_MULT, server_state, event_name, event_uid, keys, vals) {
-				cheese.size *= m;
+				cheese.size = cheese.size*m as i32;
 			}
-			cheese.size += util::find_u32_field(FIELD_SIZE_INCR, server_state, event_name, event_uid, keys, vals).unwrap_or(0);
+			cheese.size += util::find_i32_field(FIELD_SIZE_INCR, server_state, event_name, event_uid, keys, vals).unwrap_or(0);
 
-			let mut cmdgetuid = redis::Cmd::incr(KEY_CHEESE_UID_MAX, 1i32);
+			let mut cmdgetuid = redis::Cmd::incr(KEY_CHEESE_UID_MAX, 1);
 			let val = &util::auto_retry_cmd(server_state, &mut cmdgetuid)?;
 
 			let cheese_uid = util::get_u64_from_val_or_panic(server_state, val);
@@ -162,7 +170,7 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 			cmdxadd.arg(FIELD_ROOM_UID).arg(room);
 
 			util::save_cheese(server_state, &mut cmdhset, &cheese);
-			util::send_cheese_to_overlay(server_state, &mut cmdxadd, &cheese);
+			util::save_cheese(server_state, &mut cmdxadd, &cheese);
 
 			let time_out_ms = server_state.rng.gen_range(cheese.time_min..=cheese.time_max);
 			let time_out = f64::min((time_out_ms as f64)/1000.0, VAL_CHEESE_MAX_TTL - 5.0);
@@ -170,7 +178,7 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 			server_state.cheese_timeouts.push(time_out);
 			server_state.cheese_uids.push(cheese_uid);
 			server_state.cheese_rooms.push(Vec::from(room));
-			server_state.cheese_ids.push(cheese_id);
+			server_state.cheese_ids.push(cheese_id_hash);
 
 			util::auto_retry_cmd(server_state, &mut cmdhset)?;
 			util::auto_retry_cmd(server_state, &mut cmdex)?;
@@ -201,7 +209,8 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 	
 				let val : redis::Value = util::auto_retry_cmd(server_state, &mut cmdget)?;
 				if let redis::Value::Data(data) = val {
-				if let Some(user_cheese) = util::to_i64(&data[..]) {
+				if let Some(user_cheese_raw) = util::to_i64(&data[..]) {
+				let mut user_cheese = user_cheese_raw;
 				
 				user_cheese += ((user_cheese as f64)*(cheese.squirrel_mult as f64)) as i64;
 				user_cheese += (cheese.size as i64);
@@ -227,11 +236,11 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 			print!("shutdown request acknowledged, closing the server\n");
 			//TODO: pipeline this above all else, a slow closing server is unacceptable
 
-			for room in server_state.cheese_rooms {
+			for i in 0..server_state.cheese_rooms.len() {
 
 				let mut cmdxadd = redis::cmd("XADD");
 				cmdxadd.arg(EVENT_CHEESE_UPDATE).arg("*");
-				cmdxadd.arg(FIELD_ROOM_UID).arg(room);
+				cmdxadd.arg(FIELD_ROOM_UID).arg(&server_state.cheese_rooms[i]);
 
 				util::auto_retry_cmd(server_state, &mut cmdxadd)?;
 			}
@@ -248,8 +257,8 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 pub fn server_update(server_state : &mut SneakyMouseServer, trans_mem : &mut Vec<u8>, delta : f64) -> Option<f64> {
 	server_state.cur_time += delta;
 
-	let i = 0;
-	let next_timeout = REDIS_STREAM_TIMEOUT_MAX;
+	let mut i = 0;
+	let mut next_timeout = REDIS_STREAM_TIMEOUT_MAX;
 	while i < server_state.cheese_timeouts.len() {
 		if server_state.cheese_timeouts[i] <= server_state.cur_time {
 			server_state.cheese_timeouts.swap_remove(i);
@@ -257,16 +266,17 @@ pub fn server_update(server_state : &mut SneakyMouseServer, trans_mem : &mut Vec
 			let room = server_state.cheese_rooms.swap_remove(i);
 			server_state.cheese_ids.swap_remove(i);
 
-			let cheese = util::get_cheese_data_from_uid(server_state, cheese_uid, trans_mem);
+			let mut cheese = util::get_cheese_from_uid(server_state, cheese_uid, trans_mem)?;
 
 			let mut cmdxadd = redis::cmd("XADD");
 			cmdxadd.arg(EVENT_CHEESE_UPDATE).arg("*");
 			cmdxadd.arg(FIELD_ROOM_UID).arg(room);
 
-			if let Some(radical) = cheese.radicalizes {
-				cheese.image = radical;
+			if let Some(radical) = &cheese.radicalizes {
+				cheese.image.clear();
+				cheese.image.extend(radical);
 				cheese.exclusive = true;
-				cheese.size *= CHEESE_RADICAL_MULT;
+				cheese.size = (CHEESE_RADICAL_MULT*cheese.size as f32) as i32;
 				cheese.squirrel_mult *= CHEESE_RADICAL_MULT;
 
 				let mut cmdhset = redis::cmd("HMSET");
@@ -276,9 +286,10 @@ pub fn server_update(server_state : &mut SneakyMouseServer, trans_mem : &mut Vec
 				trans_mem.clear();
 
 				util::save_cheese(server_state, &mut cmdhset, &cheese);
-				util::send_cheese_to_overlay(server_state, &mut cmdxadd, &cheese);
-			}
+				util::save_cheese(server_state, &mut cmdxadd, &cheese);
 
+				util::auto_retry_cmd(server_state, &mut cmdhset)?;
+			}
 			util::auto_retry_cmd(server_state, &mut cmdxadd)?;
 		} else {
 			next_timeout = f64::min(next_timeout, server_state.cheese_timeouts[i] - server_state.cur_time);

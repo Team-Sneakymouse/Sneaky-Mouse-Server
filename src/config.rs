@@ -77,6 +77,7 @@ pub const FIELD_TIME_MIN : &str = "time-min";
 pub const FIELD_TIME_MAX : &str = "time-max";
 pub const FIELD_EXCLUSIVE : &str = "exclusive";
 pub const FIELD_SIZE : &str = "size";
+pub const FIELD_ORIGINAL_SIZE : &str = "original-size";
 pub const FIELD_SQUIRREL_MULT : &str = "squirrel-mult";
 pub const FIELD_SILENT : &str = "silent";
 pub const FIELD_SIZE_MULT : &str = "size-mult";

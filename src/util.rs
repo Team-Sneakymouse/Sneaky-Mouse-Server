@@ -11,12 +11,12 @@ pub fn push_u64(mem : &mut Vec<u8>, i : u64) {
 	mem.push(((i%10) as u8) + 48);
 }
 pub fn to_u64(mem : &[u8]) -> Option<u64> {//eats leading 0s
-	if mem.len() > 19 {return None;}
+	if mem.len() > 20 {return Some(u64::MAX);}
 	let mut i : u64 = 0;
 	for c in mem {
 		if *c >= 48u8 && *c <= 48 + 9 {
-			i += (*c - 48) as u64;
-			i *= 10;
+			i = u64::saturating_add(i, (*c - 48) as u64);
+			i = u64::saturating_mul(i, 10);
 		} else {
 			return None;
 		}
@@ -24,12 +24,12 @@ pub fn to_u64(mem : &[u8]) -> Option<u64> {//eats leading 0s
 	return Some(i);
 }
 pub fn to_u32(mem : &[u8]) -> Option<u32> {//eats leading 0s
-	if mem.len() > 9 {return None;}
+	if mem.len() > 10 {return Some(u32::MAX);}
 	let mut i : u32 = 0;
 	for c in mem {
 		if *c >= 48u8 && *c <= 48 + 9 {
-			i += (*c - 48) as u32;
-			i *= 10;
+			i = u32::saturating_add(i, (*c - 48) as u32);
+			i = u32::saturating_mul(i, 10);
 		} else {
 			return None;
 		}
@@ -37,52 +37,53 @@ pub fn to_u32(mem : &[u8]) -> Option<u32> {//eats leading 0s
 	return Some(i);
 }
 pub fn to_i64(mem : &[u8]) -> Option<i64> {//eats leading 0s
-	if mem.len() > 9 {return None;}
-	let mut s = 0;
-	if mem[0] == '-' {s += 1;}
 	let mut i : i64 = 0;
+	let s = if mem[0] == 45 {1} else {0};
 	for c in &mem[s..] {
 		if *c >= 48u8 && *c <= 48 + 9 {
-			i += (*c - 48) as i64;
-			i *= 10;
+			i = i64::saturating_add(i, (*c - 48) as i64);
+			i = i64::saturating_mul(i, 10);
 		} else {
 			return None;
 		}
 	}
-	return Some(i);
+	if s == 1 {
+		return Some(-i);
+	} else {
+		return Some(i);
+	}
 }
 pub fn to_i32(mem : &[u8]) -> Option<i32> {//eats leading 0s
-	if mem.len() > 9 {return None;}
-	let mut s = 0;
-	if mem[0] == '-' {s += 1;}
 	let mut i : i32 = 0;
+	let s = if mem[0] == 45 {1} else {0};
 	for c in &mem[s..] {
 		if *c >= 48u8 && *c <= 48 + 9 {
-			i += (*c - 48) as i32;
-			i *= 10;
+			i = i32::saturating_add(i, (*c - 48) as i32);
+			i = i32::saturating_mul(i, 10);
 		} else {
 			return None;
 		}
 	}
-	return Some(i);
+	if s == 1 {
+		return Some(-i);
+	} else {
+		return Some(i);
+	}
 }
 pub fn to_f32(mem : &[u8]) -> Option<f32> {//eats leading 0s
-	if mem.len() > 9 {return None;}
-	let mut i : f32 = 0.0;
-	for c in mem {
-		if *c >= 48u8 && *c <= 48 + 9 {
-			i += (*c - 48) as f32;
-			i *= 10.0;
-		} else {
-			return None;
-		}
+	if let Ok(s) = std::str::from_utf8(mem) {
+	if let Ok(v) = s.parse::<f32>() {
+	return Some(v);
 	}
-	return Some(i);
+	}
+	return None;
 }
 pub fn to_bool(mem : &[u8]) -> Option<bool> {//eats leading 0s
 	match mem {
 		b"true" => Some(true),
 		b"false" => Some(false),
+		b"1" => Some(true),
+		b"0" => Some(false),
 		_ => None,
 	}
 }
@@ -127,7 +128,12 @@ pub fn find_val<'a>(key : &str, keys : &[&[u8]], vals : &[&'a[u8]]) -> Option<&'
 	return None;
 }
 
-
+pub fn find_data_field(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<Vec<u8>> {
+	match find_val(key, keys, vals) {
+		Some(raw) => Some(Vec::from(raw)),
+		None => None,
+	}
+}
 pub fn find_bool_field(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<bool> {
 	match find_val(key, keys, vals) {
 		Some(raw) => match to_bool(raw) {
@@ -152,34 +158,67 @@ pub fn find_u32_field(key : &'static str, server_state : &mut SneakyMouseServer,
 		None => None
 	}
 }
-pub fn set_cheese_data(server_state : &mut SneakyMouseServer, cmd : &mut redis::Cmd, cheese : &CheeseData) {
-	cmd.arg(FIELD_IMAGE).arg(cheese.image);
+pub fn find_i32_field(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<i32> {
+	match find_val(key, keys, vals) {
+		Some(raw) => match to_i32(raw) {
+			Some(i) => Some(i),
+			None => {
+				invalid_value(server_state, event_name, event_uid, keys, vals, key);
+				None
+			}
+		}
+		None => None
+	}
+}
+pub fn find_f32_field(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<f32> {
+	match find_val(key, keys, vals) {
+		Some(raw) => match to_f32(raw) {
+			Some(i) => Some(i),
+			None => {
+				invalid_value(server_state, event_name, event_uid, keys, vals, key);
+				None
+			}
+		}
+		None => None
+	}
+}
+
+pub fn save_cheese(server_state : &mut SneakyMouseServer, cmd : &mut redis::Cmd, cheese : &CheeseData) {
+	cmd.arg(FIELD_IMAGE).arg(&cheese.image);
+	if let Some(s) = &cheese.radicalizes {
+		cmd.arg(FIELD_RADICALIZES).arg(s);
+	}
 	cmd.arg(FIELD_TIME_MIN).arg(cheese.time_min);
 	cmd.arg(FIELD_TIME_MAX).arg(cheese.time_max);
 	cmd.arg(FIELD_SIZE).arg(cheese.size);
+	cmd.arg(FIELD_ORIGINAL_SIZE).arg(cheese.original_size);
+	cmd.arg(FIELD_SQUIRREL_MULT).arg(cheese.squirrel_mult);
 	cmd.arg(FIELD_SILENT).arg(cheese.silent);
 	cmd.arg(FIELD_EXCLUSIVE).arg(cheese.exclusive);
 }
 
 
 
-fn _get_cheese_from_val(server_state : &mut SneakyMouseServer, cheese_val : redis::Value, trans_mem : &mut Vec<u8>) -> Option<CheeseData> {
+fn _get_cheese_from_val(server_state : &mut SneakyMouseServer, cheese_val : redis::Value, set_original_size : bool, trans_mem : &mut Vec<u8>) -> CheeseData {
 	let mut cheese = generate_default_cheese();
 	if let redis::Value::Bulk(vals) = cheese_val {
 	
 	if vals.len()%2 == 1 {mismatch_spec(server_state, file!(), line!());}
 	let mut has_set_time = false;
 	for i in 0..vals.len()/2 {
-		if let redis::Value::Data(field) = vals[i] {
-		if let redis::Value::Data(val) = vals[i + 1] {
+		if let redis::Value::Data(field) = &vals[i] {
+		if let redis::Value::Data(val) = &vals[i + 1] {
 		
 		if field == FIELD_IMAGE.as_bytes() {
-			cheese.image = Vec::from(val);
+			cheese.image.clear();
+			cheese.image.extend(val);
 		} else if field == FIELD_RADICALIZES.as_bytes() {
 			if is_str_null(&val[..]) {
 				cheese.radicalizes = None;
 			} else {
-				cheese.radicalizes = Some(Vec::from(val));
+				let mut rad = Vec::new();
+				rad.extend(val);
+				cheese.radicalizes = Some(rad);
 			}
 		} else if field == FIELD_TIME_MIN.as_bytes() {
 			if let Some(time) = to_u32(&val) {
@@ -200,7 +239,9 @@ fn _get_cheese_from_val(server_state : &mut SneakyMouseServer, cheese_val : redi
 		} else if field == FIELD_SIZE.as_bytes() {
 			if let Some(size) = to_i32(&val) {
 				cheese.size = size;
-				cheese.original_size = size;
+				if set_original_size {
+					cheese.original_size = size;
+				}
 			} else {invalid_db_entry(server_state, &trans_mem[..], FIELD_SIZE, &val)}
 		} else if field == FIELD_SQUIRREL_MULT.as_bytes() {
 			if let Some(mult) = to_f32(&val) {
@@ -214,33 +255,36 @@ fn _get_cheese_from_val(server_state : &mut SneakyMouseServer, cheese_val : redi
 			if let Some(is) = to_bool(&val) {
 				cheese.exclusive = is;
 			} else {invalid_db_entry(server_state, &trans_mem[..], FIELD_SIZE, &val)}
-		}		
+		} else if !set_original_size && field == FIELD_ORIGINAL_SIZE.as_bytes() {
+			if let Some(size) = to_i32(&val) {
+				cheese.original_size = size;
+			} else {invalid_db_entry(server_state, &trans_mem[..], FIELD_ORIGINAL_SIZE, &val)}
+		}
 		} else {mismatch_spec(server_state, file!(), line!());}
 		} else {mismatch_spec(server_state, file!(), line!());}
 	}
 	} else {mismatch_spec(server_state, file!(), line!());}
 	trans_mem.clear();
-	return Some(cheese);
+	return cheese;
 }
 
 pub fn get_cheese_from_id(server_state : &mut SneakyMouseServer, cheese_id : &[u8], trans_mem : &mut Vec<u8>) -> Option<CheeseData> {
-
 	trans_mem.extend(KEY_CHEESE_PREFIX.as_bytes());
 	trans_mem.extend(cheese_id);
 	let mut cmdgetdata = redis::cmd("HGETALL");
 	cmdgetdata.arg(&trans_mem[..]);
 
-	return _get_cheese_from_val(server_state, auto_retry_cmd(server_state, &mut cmdgetdata)?, trans_mem);
+	let val = auto_retry_cmd(server_state, &mut cmdgetdata)?;
+	return Some(_get_cheese_from_val(server_state, val, true, trans_mem));
 }
 pub fn get_cheese_from_uid(server_state : &mut SneakyMouseServer, cheese_uid : u64, trans_mem : &mut Vec<u8>) -> Option<CheeseData> {
-	let mut cheese = generate_default_cheese();
-
 	trans_mem.extend(KEY_CHEESE_DATA_PREFIX.as_bytes());
 	push_u64(trans_mem, cheese_uid);
 	let mut cmdgetdata = redis::cmd("HGETALL");
 	cmdgetdata.arg(&trans_mem[..]);
 
-	return _get_cheese_from_val(server_state, auto_retry_cmd(server_state, &mut cmdgetdata)?, trans_mem);
+	let val = auto_retry_cmd(server_state, &mut cmdgetdata)?;
+	return Some(_get_cheese_from_val(server_state, val, false, trans_mem));
 }
 
 

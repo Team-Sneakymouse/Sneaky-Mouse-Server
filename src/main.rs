@@ -28,6 +28,11 @@ fn server_main() -> Option<bool> {
 		redis_con : con,
 		redis_address : &redis_address[..],
 		rng : Pcg64::from_entropy(),
+		cur_time : 0.0,
+		cheese_timeouts : Vec::new(),
+		cheese_uids : Vec::new(),
+		cheese_rooms : Vec::new(),
+		cheese_ids : Vec::new(),
 	};
 	let mut trans_mem = Vec::new();
 	let server_state = &mut server_state_mem;
@@ -65,9 +70,8 @@ fn server_main() -> Option<bool> {
 
 	let mut event_keys_mem = Vec::<&[u8]>::new();
 	let mut event_vals_mem = Vec::<&[u8]>::new();
-	let opts = redis::streams::StreamReadOptions::default().count(config::REDIS_STREAM_READ_COUNT);
 	loop {
-		let mut cur_time = Instant::now();
+		let cur_time = Instant::now();
 		let delta : f64 = match cur_time.checked_duration_since(last_time) {
 			Some(dur) => dur.as_secs_f64(),
 			None => 0.0,
@@ -75,7 +79,7 @@ fn server_main() -> Option<bool> {
 		last_time = cur_time;
 		let timeout = event::server_update(server_state, &mut trans_mem, delta)?;
 
-		opts.block((timeout*1000.0) as usize);
+		let opts = redis::streams::StreamReadOptions::default().count(config::REDIS_STREAM_READ_COUNT).block((timeout*1000.0) as usize);
 
 		let mut cmd = redis::Cmd::xread_options(&events[..], &last_ids[..], &opts);
 		let response : redis::Value = util::auto_retry_cmd(server_state, &mut cmd)?;
