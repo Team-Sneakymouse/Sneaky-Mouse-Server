@@ -10,6 +10,14 @@ pub fn push_u64(mem : &mut Vec<u8>, i : u64) {
 	}
 	mem.push(((i%10) as u8) + 48);
 }
+pub fn push_u64_prefix<'a>(mem : &'a mut Vec<u8>, prefix : &str, i : u64) -> &'a[u8] {
+	let start = mem.len();
+	mem.extend(prefix.as_bytes());
+	push_u64(mem, i);
+	let end = mem.len();
+	return &mem[start..end];
+}
+
 pub fn to_u64(mem : &[u8]) -> Option<u64> {//eats leading 0s
 	if mem.len() > 20 {return Some(u64::MAX);}
 	let mut i : u64 = 0;
@@ -102,8 +110,7 @@ pub fn get_u64_from_val_or_panic(server_state : &mut SneakyMouseServer, val : &r
 	}
 }
 pub fn lookup_user_uuid(server_state : &mut SneakyMouseServer, user_identifier : &[u8]) -> Option<u64> {
-	let mut cmd = redis::cmd("HGET");
-	cmd.arg(KEY_USERUUID_HM).arg(user_identifier);
+	let mut cmd = redis::Cmd::hget(KEY_USERUUID_HM, user_identifier);
 	match FromRedisValue::from_redis_value(&auto_retry_cmd(server_state, &mut cmd)?) {
 		Ok(uuid) => Some(uuid),
 		Err(_) => {//assuming that the user does not exist
@@ -119,7 +126,7 @@ pub fn lookup_user_uuid(server_state : &mut SneakyMouseServer, user_identifier :
 	}
 }
 
-pub fn find_val<'a>(key : &str, keys : &[&[u8]], vals : &[&'a[u8]]) -> Option<&'a[u8]> {
+pub fn find_field_u8s<'a>(key : &str, keys : &[&[u8]], vals : &[&'a[u8]]) -> Option<&'a[u8]> {
 	for (i, cur_key) in keys.iter().enumerate() {
 		if &key.as_bytes() == cur_key {
 			return Some(vals[i]);
@@ -128,14 +135,14 @@ pub fn find_val<'a>(key : &str, keys : &[&[u8]], vals : &[&'a[u8]]) -> Option<&'
 	return None;
 }
 
-pub fn find_data_field(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<Vec<u8>> {
-	match find_val(key, keys, vals) {
+pub fn find_field_and_allocate(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<Vec<u8>> {
+	match find_field_u8s(key, keys, vals) {
 		Some(raw) => Some(Vec::from(raw)),
 		None => None,
 	}
 }
-pub fn find_bool_field(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<bool> {
-	match find_val(key, keys, vals) {
+pub fn find_field_bool(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<bool> {
+	match find_field_u8s(key, keys, vals) {
 		Some(raw) => match to_bool(raw) {
 			Some(i) => Some(i),
 			None => {
@@ -146,8 +153,8 @@ pub fn find_bool_field(key : &'static str, server_state : &mut SneakyMouseServer
 		None => None
 	}
 }
-pub fn find_u32_field(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<u32> {
-	match find_val(key, keys, vals) {
+pub fn find_field_u32(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<u32> {
+	match find_field_u8s(key, keys, vals) {
 		Some(raw) => match to_u32(raw) {
 			Some(i) => Some(i),
 			None => {
@@ -158,8 +165,8 @@ pub fn find_u32_field(key : &'static str, server_state : &mut SneakyMouseServer,
 		None => None
 	}
 }
-pub fn find_i32_field(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<i32> {
-	match find_val(key, keys, vals) {
+pub fn find_field_i32(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<i32> {
+	match find_field_u8s(key, keys, vals) {
 		Some(raw) => match to_i32(raw) {
 			Some(i) => Some(i),
 			None => {
@@ -170,8 +177,8 @@ pub fn find_i32_field(key : &'static str, server_state : &mut SneakyMouseServer,
 		None => None
 	}
 }
-pub fn find_f32_field(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<f32> {
-	match find_val(key, keys, vals) {
+pub fn find_field_f32(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<f32> {
+	match find_field_u8s(key, keys, vals) {
 		Some(raw) => match to_f32(raw) {
 			Some(i) => Some(i),
 			None => {
@@ -182,6 +189,29 @@ pub fn find_f32_field(key : &'static str, server_state : &mut SneakyMouseServer,
 		None => None
 	}
 }
+pub fn find_field_user_uuid(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<u64> {
+	match find_field_u8s(key, keys, vals) {
+		Some(raw) => lookup_user_uuid(server_state, raw),
+		None => None
+	}
+}
+
+pub fn check_user_has_enough_currency(server_state : &mut SneakyMouseServer, user_key : &[u8], currency_field : &str, delta : i32) -> Option<bool> {
+	if delta >= 0 {
+		return Some(true);
+	} else {
+		let mut cmdget = redis::Cmd::hget(user_key, currency_field);
+
+		let val : redis::Value = auto_retry_cmd(server_state, &mut cmdget)?;
+		if let Some(v) = get_from_val_i64(val) {
+			if v + (delta as i64) >= 0 {
+				return Some(true);
+			}
+		}
+	}
+	return Some(false);
+}
+
 
 pub fn save_cheese(server_state : &mut SneakyMouseServer, cmd : &mut redis::Cmd, cheese : &CheeseData) {
 	cmd.arg(FIELD_IMAGE).arg(&cheese.image);
@@ -201,17 +231,17 @@ pub fn save_cheese(server_state : &mut SneakyMouseServer, cmd : &mut redis::Cmd,
 
 
 
-fn _get_cheese_from_val(server_state : &mut SneakyMouseServer, cheese_val : redis::Value, set_original_size : bool, trans_mem : &mut Vec<u8>) -> CheeseData {
+fn _get_cheese_from_val(server_state : &mut SneakyMouseServer, cheese_val : redis::Value, set_original_size : bool, key : &[u8]) -> CheeseData {
 	let mut cheese = generate_default_cheese();
 	if let redis::Value::Bulk(vals) = cheese_val {
-	
+
 	if vals.len()%2 == 1 {mismatch_spec(server_state, file!(), line!());}
 	let mut has_set_time = false;
 	for i2 in 0..vals.len()/2 {
 		let i = i2*2;
 		if let redis::Value::Data(field) = &vals[i] {
 		if let redis::Value::Data(val) = &vals[i + 1] {
-		
+
 		if field == FIELD_IMAGE.as_bytes() {
 			cheese.image.clear();
 			cheese.image.extend(val);
@@ -230,7 +260,7 @@ fn _get_cheese_from_val(server_state : &mut SneakyMouseServer, cheese_val : redi
 					has_set_time = true;
 					cheese.time_max = time;
 				}
-			} else {invalid_db_entry(server_state, &trans_mem[..], FIELD_TIME_MIN, &val)}
+			} else {invalid_db_entry(server_state, key, FIELD_TIME_MIN, &val)}
 		} else if field == FIELD_TIME_MAX.as_bytes() {
 			if let Some(time) = to_u32(&val) {
 				cheese.time_max = time;
@@ -238,56 +268,59 @@ fn _get_cheese_from_val(server_state : &mut SneakyMouseServer, cheese_val : redi
 					has_set_time = true;
 					cheese.time_min = time;
 				}
-			} else {invalid_db_entry(server_state, &trans_mem[..], FIELD_TIME_MAX, &val)}
+			} else {invalid_db_entry(server_state, key, FIELD_TIME_MAX, &val)}
 		} else if field == FIELD_SIZE.as_bytes() {
 			if let Some(size) = to_i32(&val) {
 				cheese.size = size;
 				if set_original_size {
 					cheese.original_size = size;
 				}
-			} else {invalid_db_entry(server_state, &trans_mem[..], FIELD_SIZE, &val)}
+			} else {invalid_db_entry(server_state, key, FIELD_SIZE, &val)}
 		} else if field == FIELD_SQUIRREL_MULT.as_bytes() {
 			if let Some(mult) = to_f32(&val) {
 				cheese.squirrel_mult = mult;
-			} else {invalid_db_entry(server_state, &trans_mem[..], FIELD_SIZE, &val)}
+			} else {invalid_db_entry(server_state, key, FIELD_SIZE, &val)}
 		} else if field == FIELD_SILENT.as_bytes() {
 			if let Some(is) = to_bool(&val) {
 				cheese.silent = is;
-			} else {invalid_db_entry(server_state, &trans_mem[..], FIELD_SIZE, &val)}
+			} else {invalid_db_entry(server_state, key, FIELD_SIZE, &val)}
 		} else if field == FIELD_EXCLUSIVE.as_bytes() {
 			if let Some(is) = to_bool(&val) {
 				cheese.exclusive = is;
-			} else {invalid_db_entry(server_state, &trans_mem[..], FIELD_SIZE, &val)}
+			} else {invalid_db_entry(server_state, key, FIELD_SIZE, &val)}
 		} else if !set_original_size && field == FIELD_ORIGINAL_SIZE.as_bytes() {
 			if let Some(size) = to_i32(&val) {
 				cheese.original_size = size;
-			} else {invalid_db_entry(server_state, &trans_mem[..], FIELD_ORIGINAL_SIZE, &val)}
+			} else {invalid_db_entry(server_state, key, FIELD_ORIGINAL_SIZE, &val)}
 		}
 		} else {mismatch_spec(server_state, file!(), line!());}
 		} else {mismatch_spec(server_state, file!(), line!());}
 	}
 	} else {mismatch_spec(server_state, file!(), line!());}
-	trans_mem.clear();
 	return cheese;
 }
 
 pub fn get_cheese_from_id(server_state : &mut SneakyMouseServer, cheese_id : &[u8], trans_mem : &mut Vec<u8>) -> Option<CheeseData> {
+	let s = trans_mem.len();
 	trans_mem.extend(KEY_CHEESE_PREFIX.as_bytes());
 	trans_mem.extend(cheese_id);
+	let e = trans_mem.len();
+	let key = &trans_mem[s..e];
+
 	let mut cmdgetdata = redis::cmd("HGETALL");
-	cmdgetdata.arg(&trans_mem[..]);
+	cmdgetdata.arg(key);
 
 	let val = auto_retry_cmd(server_state, &mut cmdgetdata)?;
-	return Some(_get_cheese_from_val(server_state, val, true, trans_mem));
+	return Some(_get_cheese_from_val(server_state, val, true, key));
 }
 pub fn get_cheese_from_uid(server_state : &mut SneakyMouseServer, cheese_uid : u64, trans_mem : &mut Vec<u8>) -> Option<CheeseData> {
-	trans_mem.extend(KEY_CHEESE_DATA_PREFIX.as_bytes());
-	push_u64(trans_mem, cheese_uid);
+	let key = push_u64_prefix(trans_mem, KEY_CHEESE_DATA_PREFIX, cheese_uid);
+
 	let mut cmdgetdata = redis::cmd("HGETALL");
-	cmdgetdata.arg(&trans_mem[..]);
+	cmdgetdata.arg(key);
 
 	let val = auto_retry_cmd(server_state, &mut cmdgetdata)?;
-	return Some(_get_cheese_from_val(server_state, val, false, trans_mem));
+	return Some(_get_cheese_from_val(server_state, val, false, key));
 }
 
 
@@ -388,7 +421,7 @@ pub fn invalid_db_entry(server_state : &mut event::SneakyMouseServer, key : &[u8
 }
 
 pub fn invalid_value(server_state : &mut event::SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]], field : &'static str) {
-	let mut error = format!("invalid event error: field '{}' had an incorrect value, the event will still be executed with default values, name:{} id:{} contents:", field, String::from_utf8_lossy(event_name), String::from_utf8_lossy(event_uid));
+	let mut error = format!("invalid event error: field '{}' had an incorrect value, the event will still be attempted with default values, name:{} id:{} contents:", field, String::from_utf8_lossy(event_name), String::from_utf8_lossy(event_uid));
 	push_kvs(&mut error, keys, vals);
 
 	print!("{}\n", error);
