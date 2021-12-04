@@ -70,15 +70,19 @@ pub const KEY_MOUSE_HAT : &str = "mouse:hat";
 pub const VAL_MOUSE_BODY_DEFAULT : &str = "danipls";
 pub const VAL_CHEESE_MAX_TTL : f64 = 5.0*60.0*60.0;
 pub const VAL_NULL : &str = "null";
+
+pub const VAL_CHEESE_STRAT_CANCEL : &[u8] = b"cancel";
+pub const VAL_CHEESE_STRAT_OVERFLOW : &[u8] = b"overflow";
+pub const VAL_CHEESE_STRAT_SATURATE : &[u8] = b"saturate";
 // pub const VAL_TRUE : &str = "true";
 // pub const VAL_FALSE : &str = "false";
 
 
+pub const  IN_EVENT_CHEESE_GIVE : &[u8] = b"sm-cheese:give";
+pub const OUT_EVENT_CHEESE_AWARD : &[u8] = b"sm-cheese:award";
 pub const  IN_EVENT_DEBUG_CONSOLE : &[u8] = b"debug:console";
 pub const OUT_EVENT_DEBUG_ERROR : &[u8] = b"debug:error";
 pub const  IN_EVENT_SHUTDOWN : &[u8] = b"sm:shutdown";
-
-pub const  IN_EVENT_CHEESE_GIVE : &[u8] = b"sm-cheese:give";
 
 pub const  IN_EVENT_CHEESE_SPAWN : &[u8] = b"sm-cheese:spawn";
 pub const OUT_EVENT_CHEESE_UPDATE : &[u8] = b"sm-cheese:update";
@@ -97,6 +101,12 @@ pub const FIELD_USER_NAME : &str = "user-name";
 pub const FIELD_ROOM_UID : &str = "room-uid";
 pub const FIELD_CHEESE_TOTAL : &str = "cheese";
 pub const FIELD_GEM_TOTAL : &str = "gems";
+pub const FIELD_CHEESE_DELTA : &str = "cheese-delta";
+pub const FIELD_GEM_DELTA : &str = "gems-delta";
+pub const FIELD_CHEESE_COST : &str = "cheese-cost";
+pub const FIELD_GEM_COST : &str = "gem-cost";
+pub const FIELD_DEST_UID : &str = "dest-uid";
+pub const FIELD_SRC_UID : &str = "src-uid";
 
 pub const FIELD_CHEESE_ID : &str = "cheese-id";
 pub const FIELD_CHEESE_UID : &str = "cheese-uid";

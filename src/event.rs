@@ -38,40 +38,87 @@ pub fn get_event_list() -> [&'static [u8]; 7] {
 pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]], trans_mem : &mut Vec<u8>) -> Option<bool> {
 	match event_name {
 		IN_EVENT_CHEESE_GIVE => {//Non-atomic
-			if let Some(dest_uuid) = find_field_user_uuid(FIELD_USER_UID, server_state, event_name, event_uid, keys, vals) {
+			if let Some(dest_uid_raw) = find_field_u8s(FIELD_DEST_UID, keys, vals) {
+			let dest_uuid = lookup_user_uuid(server_state, dest_uid_raw)?;
 
-			let cheese_delta = find_field_i32(FIELD_USER_UID, server_state, event_name, event_uid, keys, vals).unwrap_or(0);
-			let gem_delta = find_field_i32(FIELD_USER_UID, server_state, event_name, event_uid, keys, vals).unwrap_or(0);
+			let mut cheese_delta = find_field_i32(FIELD_CHEESE_DELTA, server_state, event_name, event_uid, keys, vals).unwrap_or(0).clamp(-i32::MAX/2, i32::MAX/2);
+			let gem_delta = find_field_i32(FIELD_GEM_DELTA, server_state, event_name, event_uid, keys, vals).unwrap_or(0).clamp(-i32::MAX/2, i32::MAX/2);
 
 			let dest_key = push_u64_prefix(trans_mem, KEY_USER_PREFIX, dest_uuid);
 
-			if check_user_has_enough_currency(server_state, dest_key, FIELD_CHEESE_TOTAL, cheese_delta)? && check_user_has_enough_currency(server_state, dest_key, FIELD_GEM_TOTAL, gem_delta)? {
+			let strat = match find_field_u8s(FIELD_DEST_UID, keys, vals).unwrap_or(VAL_CHEESE_STRAT_CANCEL) {
+				VAL_CHEESE_STRAT_CANCEL => 0,
+				VAL_CHEESE_STRAT_OVERFLOW => 1,
+				VAL_CHEESE_STRAT_SATURATE => 2,
+				_ => {
+					invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_DEST_UID);
+					0
+				}
+			};
 
-				let mut pipe = redis::pipe();
-				// pipe.atomic();
-				pipe.hincr(dest_key, FIELD_CHEESE_TOTAL, cheese_delta);
-				pipe.hincr(dest_key, FIELD_GEM_TOTAL, gem_delta);
+			let mut do_transaction = true;
+			if strat == 0 {
+				do_transaction = check_user_has_enough_currency(server_state, dest_key, FIELD_CHEESE_TOTAL, cheese_delta)?;
+			} else if strat == 0 {
+				let (d, _) = check_user_saturating_currency(server_state, dest_key, FIELD_CHEESE_TOTAL, cheese_delta, 0)?;
+				cheese_delta = d;
+			}
 
-				if let Some(src_uuid) = find_field_user_uuid(FIELD_USER_UID, server_state, event_name, event_uid, keys, vals) {
+			if do_transaction && check_user_has_enough_currency(server_state, dest_key, FIELD_GEM_TOTAL, gem_delta)? {
+				if let Some(src_uid_raw) = find_field_u8s(FIELD_SRC_UID, keys, vals) {
+					let src_uuid = lookup_user_uuid(server_state, src_uid_raw)?;
 
-					let cheese_cost_src = find_field_i32(FIELD_USER_UID, server_state, event_name, event_uid, keys, vals).unwrap_or(0);
-					let gem_cost_src = find_field_i32(FIELD_USER_UID, server_state, event_name, event_uid, keys, vals).unwrap_or(0);
+					let cheese_cost_src = find_field_i32(FIELD_USER_UID, server_state, event_name, event_uid, keys, vals).unwrap_or(0).clamp(-i32::MAX/2, i32::MAX/2);
+					let gem_cost_src = find_field_i32(FIELD_USER_UID, server_state, event_name, event_uid, keys, vals).unwrap_or(0).clamp(-i32::MAX/2, i32::MAX/2);
 
 					let src_key = push_u64_prefix(trans_mem, KEY_USER_PREFIX, src_uuid);
 
-					if check_user_has_enough_currency(server_state, src_key, FIELD_CHEESE_TOTAL, -cheese_delta - cheese_cost_src)? && check_user_has_enough_currency(server_state, src_key, FIELD_GEM_TOTAL, -gem_delta - gem_cost_src)? {
+					let mut do_transaction = true;
+					if strat == 0 {
+						do_transaction = check_user_has_enough_currency(server_state, src_key, FIELD_CHEESE_TOTAL, -cheese_delta - cheese_cost_src)?;
+					} else if strat == 0 {
+						let (d, is) = check_user_saturating_currency(server_state, src_key, FIELD_CHEESE_TOTAL, -cheese_delta, -cheese_cost_src)?;
+						do_transaction = is;
+						cheese_delta = -d;
+					}
+
+					if do_transaction && check_user_has_enough_currency(server_state, src_key, FIELD_GEM_TOTAL, -gem_delta - gem_cost_src)? {
+
+						let mut pipe = redis::pipe();
+						pipe.cmd("XADD");
+						pipe.arg(OUT_EVENT_CHEESE_AWARD).arg("*");
+						pipe.arg(FIELD_DEST_UID).arg(dest_uid_raw);
+						pipe.arg(FIELD_SRC_UID).arg(src_uid_raw);
+						pipe.arg(FIELD_CHEESE_DELTA).arg(cheese_delta);
+						pipe.arg(FIELD_GEM_DELTA).arg(gem_delta);
+
+						pipe.hincr(dest_key, FIELD_CHEESE_TOTAL, cheese_delta);
+						pipe.hincr(dest_key, FIELD_GEM_TOTAL, gem_delta);
+
 						pipe.hincr(src_key, FIELD_CHEESE_TOTAL, -cheese_delta - cheese_cost_src);
 						pipe.hincr(src_key, FIELD_GEM_TOTAL, -gem_delta - gem_cost_src);
+
+						auto_retry_pipe(server_state, &mut pipe)?;
+
 					}
+				} else {
+
+					let mut pipe = redis::pipe();
+					pipe.cmd("XADD");
+					pipe.arg(OUT_EVENT_CHEESE_AWARD).arg("*");
+					pipe.arg(FIELD_DEST_UID).arg(dest_uid_raw);
+					pipe.arg(FIELD_CHEESE_DELTA).arg(cheese_delta);
+					pipe.arg(FIELD_GEM_DELTA).arg(gem_delta);
+
+					pipe.hincr(dest_key, FIELD_CHEESE_TOTAL, cheese_delta);
+					pipe.hincr(dest_key, FIELD_GEM_TOTAL, gem_delta);
+
+					auto_retry_pipe(server_state, &mut pipe)?;
+
 				}
-
-
-				auto_retry_pipe(server_state, &mut pipe)?;
-
-
 			}
 
-			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_CHEESE_UID);}
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_DEST_UID)}
 		},
 		IN_EVENT_CHEESE_SPAWN => {
 			if let Some(room) = find_field_u8s(FIELD_ROOM_UID, keys, vals) {
@@ -178,7 +225,7 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 			auto_retry_pipe(server_state, &mut pipe)?;
 
 
-			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_ROOM_UID);}
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_ROOM_UID)}
 		},
 		IN_EVENT_CHEESE_REQUEST => {
 			if let Some(useruid_raw) = find_field_u8s(FIELD_USER_UID, keys, vals) {
@@ -229,20 +276,22 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 
 
 			} else {mismatch_spec(server_state, file!(), line!());}
-			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_ROOM_UID);}
-			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_USER_NAME);}
-			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_USER_UID);}
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_ROOM_UID)}
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_USER_NAME)}
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_USER_UID)}
 		},
 		IN_EVENT_CHEESE_COLLECT => {//Non-atomic
 			if let Some(cheese_uid) = find_field_u64(FIELD_CHEESE_UID, server_state, event_name, event_uid, keys, vals) {
 			if let Some(useruid_raw) = find_field_u8s(FIELD_USER_UID, keys, vals) {
 
-			let uuid = lookup_user_uuid(server_state, useruid_raw)?;
 
+			let uuid = lookup_user_uuid(server_state, useruid_raw)?;
 			let cheese = get_cheese_from_uid(server_state, cheese_uid, trans_mem)?;
+
 
 			let userdata_key = push_u64_prefix(trans_mem, KEY_USER_PREFIX, uuid);
 
+			let incr;
 			if cheese.squirrel_mult != 0.0 {
 
 
@@ -250,32 +299,51 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 				let val = auto_retry_cmd(server_state, &mut cmdget)?;
 
 
-				if let redis::Value::Data(data) = val {
-				if let Some(user_cheese_original) = to_i64(&data) {
-				let mut user_cheese = user_cheese_original;
-
-				let incr = ((user_cheese as f64)*(cheese.squirrel_mult as f64)) as i64 + (cheese.size as i64);
-				user_cheese = i64::saturating_add(user_cheese, incr);
-
-
-				let mut cmdset = redis::Cmd::hset(userdata_key, FIELD_CHEESE_TOTAL, user_cheese);
-				auto_retry_cmd(server_state, &mut cmdset)?;
-
-
-				} else {invalid_db_entry(server_state, &userdata_key, FIELD_CHEESE_TOTAL, &data[..])}
-				} else {mismatch_spec(server_state, file!(), line!())}
+				if let Some(user_cheese) = get_db_entry_i64(server_state, userdata_key, FIELD_CHEESE_TOTAL, val) {
+					incr = i64::saturating_add(((user_cheese as f64)*(cheese.squirrel_mult as f64)) as i64, cheese.size as i64);
+				} else {
+					incr = 0;
+				}
 			} else if cheese.size != 0 {
-				let mut cmdincr = redis::Cmd::hincr(userdata_key, FIELD_CHEESE_TOTAL, cheese.size);
-
-
-				auto_retry_cmd(server_state, &mut cmdincr)?;
-
-
+				incr = cheese.size as i64;
+			} else {
+				incr = 0;
 			}
 
-			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_USER_UID);}
-			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_CHEESE_UID);}
+
+			if incr != 0 {
+				let mut cmdincr = redis::Cmd::hincr(userdata_key, FIELD_CHEESE_TOTAL, incr);
+				auto_retry_cmd(server_state, &mut cmdincr)?;
+			}
+
+
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_USER_UID)}
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_CHEESE_UID)}
 		}
+		IN_EVENT_CHEESE_DESPAWN => {
+			if let Some(cheese_uid) = find_field_u64(FIELD_CHEESE_UID, server_state, event_name, event_uid, keys, vals) {
+
+			for (i, cur_cheese_uid) in server_state.cheese_uids.iter().enumerate() {
+				if *cur_cheese_uid == cheese_uid {
+					server_state.cheese_timeouts.swap_remove(i);
+					server_state.cheese_uids.swap_remove(i);
+					let room = server_state.cheese_rooms.swap_remove(i);
+					server_state.cheese_ids.swap_remove(i);
+
+					let mut cmd = redis::cmd("XADD");
+					cmd.arg(OUT_EVENT_CHEESE_UPDATE).arg("*");
+					cmd.arg(FIELD_ROOM_UID).arg(room);
+
+
+					auto_retry_cmd(server_state, &mut cmd)?;
+
+
+					break;
+				}
+			}
+
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_CHEESE_UID)}
+		},
 		IN_EVENT_DEBUG_CONSOLE => {
 			print!("debug event: {} <", String::from_utf8_lossy(event_uid));
 			for (i, key) in keys.iter().enumerate() {
@@ -293,12 +361,12 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 
 			for i in 0..server_state.cheese_rooms.len() {
 
-				let mut cmdxadd = redis::cmd("XADD");
-				cmdxadd.arg(OUT_EVENT_CHEESE_UPDATE).arg("*");
-				cmdxadd.arg(FIELD_ROOM_UID).arg(&server_state.cheese_rooms[i]);
+				let mut cmd_xadd = redis::cmd("XADD");
+				cmd_xadd.arg(OUT_EVENT_CHEESE_UPDATE).arg("*");
+				cmd_xadd.arg(FIELD_ROOM_UID).arg(&server_state.cheese_rooms[i]);
 
 
-				auto_retry_cmd(server_state, &mut cmdxadd)?;
+				auto_retry_cmd(server_state, &mut cmd_xadd)?;
 
 
 			}
@@ -351,9 +419,9 @@ pub fn server_update(server_state : &mut SneakyMouseServer, trans_mem : &mut Vec
 
 
 		} else {
+			i += 1;
 			next_timeout = f64::min(next_timeout, server_state.cheese_timeouts[i] - server_state.cur_time);
 		}
-		i += 1;
 	}
 
 	Some(next_timeout)

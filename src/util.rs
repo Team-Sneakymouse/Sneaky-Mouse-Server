@@ -10,16 +10,19 @@ pub fn push_u64(mem : &mut Vec<u8>, i : u64) {
 	}
 	mem.push(((i%10) as u8) + 48);
 }
-pub fn push_u64_prefix<'a>(mem : &'a mut Vec<u8>, prefix : &str, i : u64) -> &'a[u8] {
-	let start = mem.len();
-	mem.extend(prefix.as_bytes());
-	push_u64(mem, i);
-	let end = mem.len();
-	return &mem[start..end];
+pub fn push_u64_prefix<'a>(trans_mem : &mut Vec<u8>, prefix : &str, i : u64) -> &'a[u8] {
+	//The actual lifetime of the return value is the lifetime of the transient memory, which rust's borrow checker is incapable of comprehending
+	let start = trans_mem.len();
+	trans_mem.extend(prefix.as_bytes());
+	push_u64(trans_mem, i);
+	let end = trans_mem.len();
+	let ptr = trans_mem.as_ptr();
+	unsafe {
+		return std::slice::from_raw_parts(ptr.add(start), end);
+	}
 }
 
 pub fn to_u64(mem : &[u8]) -> Option<u64> {//eats leading 0s
-	if mem.len() > 20 {return Some(u64::MAX);}
 	let mut i : u64 = 0;
 	for c in mem {
 		if *c >= 48u8 && *c <= 48 + 9 {
@@ -32,7 +35,6 @@ pub fn to_u64(mem : &[u8]) -> Option<u64> {//eats leading 0s
 	return Some(i);
 }
 pub fn to_u32(mem : &[u8]) -> Option<u32> {//eats leading 0s
-	if mem.len() > 10 {return Some(u32::MAX);}
 	let mut i : u32 = 0;
 	for c in mem {
 		if *c >= 48u8 && *c <= 48 + 9 {
@@ -201,29 +203,56 @@ pub fn find_field_f32(key : &'static str, server_state : &mut SneakyMouseServer,
 		None => None
 	}
 }
-pub fn find_field_user_uuid(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<u64> {
-	match find_field_u8s(key, keys, vals) {
-		Some(raw) => lookup_user_uuid(server_state, raw),
-		None => None
-	}
+
+pub fn get_db_entry_i64(server_state : &mut SneakyMouseServer, key : &[u8], field : &str, val :redis::Value) -> Option<i64> {
+	if let redis::Value::Data(data) = val {
+		if let Some(v) = to_i64(&data) {
+			return Some(v);
+		} else {invalid_db_entry(server_state, &key, field, &data[..])}
+	} else {mismatch_spec(server_state, file!(), line!())}
+	return None;
 }
 
-pub fn check_user_has_enough_currency(server_state : &mut SneakyMouseServer, user_key : &[u8], currency_field : &str, delta : i32) -> Option<bool> {
-	if delta >= 0 {
-		return Some(true);
+pub fn check_user_saturating_currency(server_state : &mut SneakyMouseServer, user_key : &[u8], currency_field : &str, sat_delta : i32, cancel_delta : i32) -> Option<(i32, bool)> {
+	//NOTE: sat_delta is the amount being added to the currency, return value is the largest sat_delta possible without setting the user's currency negative, or false if it is not possible to satisfy cancel_delta
+	if sat_delta + cancel_delta >= 0 {
+		return Some((sat_delta, true));
 	} else {
-		let mut cmdget = redis::Cmd::hget(user_key, currency_field);
 
+
+		let mut cmdget = redis::Cmd::hget(user_key, FIELD_CHEESE_TOTAL);
 		let val = auto_retry_cmd(server_state, &mut cmdget)?;
-		if let redis::Value::Data(data) = val {
-		if let Some(v) = to_i64(&data) {
-			if v + (delta as i64) >= 0 {
-				return Some(true);
-			}
-		}
+
+
+		let total = get_db_entry_i64(server_state, user_key, FIELD_CHEESE_TOTAL, val)?;
+		let unconditional_total = total + (cancel_delta as i64);
+		if unconditional_total >= 0 {
+			let new_total = u64::saturating_sub(unconditional_total as u64, -sat_delta as u64) as i64;
+			let new_sat_delta = (new_total - unconditional_total) as i32;
+			// proof sketch of correctness:
+			// sat_delta == unconditional_total - (-sat_delta) - unconditional_total == new_total - unconditional_total;
+			// sat_delta <= unconditional_total -sat_sub- (-sat_delta) - unconditional_total == new_sat_delta;
+			// if sat_delta >= 0, sat_delta <= new_sat_delta <= unconditional_total + sat_delta - unconditional_total == sat_delta, which implies new_sat_delta == sat_delta
+			return Some((new_sat_delta, true));
+		} else {
+			return Some((0, false));
 		}
 	}
-	return Some(false);
+}
+pub fn check_user_has_enough_currency(server_state : &mut SneakyMouseServer, user_key : &[u8], currency_field : &str, cancel_delta : i32) -> Option<bool> {
+	//NOTE: cancel_delta is the amount being added to the currency
+	if cancel_delta >= 0 {
+		return Some(true);
+	} else {
+
+
+		let mut cmdget = redis::Cmd::hget(user_key, currency_field);
+		let val = auto_retry_cmd(server_state, &mut cmdget)?;
+
+
+		let v = get_db_entry_i64(server_state, user_key, currency_field, val)?;
+		return Some(v + cancel_delta as i64 >= 0);
+	}
 }
 
 
@@ -454,7 +483,7 @@ pub fn push_kvs(error : &mut String, keys : &[&[u8]], vals : &[&[u8]]) {
 }
 
 pub fn invalid_db_entry(server_state : &mut event::SneakyMouseServer, key : &[u8], field : &str, val : &[u8]) {
-	let mut error = format!("database error: key '{}:{}' had incorrect value {}, will attempt recovery with default values", String::from_utf8_lossy(key), field, String::from_utf8_lossy(val));
+	let error = format!("database error: key '{}:{}' had incorrect value {}, will attempt recovery with default values", String::from_utf8_lossy(key), field, String::from_utf8_lossy(val));
 
 	print!("{}\n", error);
 	send_error(server_state, &error);

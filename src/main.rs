@@ -94,8 +94,14 @@ fn server_main() -> Option<bool> {
 				if let redis::Value::Data(message_id_raw) = &message[0] {
 				if let redis::Value::Bulk(message_body) = &message[1] {
 
-				let mut event_keys = event_keys_mem;
-				let mut event_vals = event_vals_mem;
+				trans_mem.clear();
+
+				//the borrow checker does not acknowledge that .clear() drops all borrowed references, so we have to force it to
+				event_keys_mem.clear();
+				let mut event_keys = unsafe {Vec::from_raw_parts(event_keys_mem.as_mut_ptr(), 0, event_keys_mem.capacity())};
+				event_vals_mem.clear();
+				let mut event_vals = unsafe {Vec::from_raw_parts(event_vals_mem.as_mut_ptr(), 0, event_vals_mem.capacity())};
+
 				for i2 in 0..message_body.len()/2 {
 					let i = i2*2;
 					if let redis::Value::Data(message_key_raw) = &message_body[i] {
@@ -128,13 +134,6 @@ fn server_main() -> Option<bool> {
 
 
 				server_event_received(server_state, &stream_name_raw, message_id_raw, &event_keys[..], &event_vals[..], &mut trans_mem)?;
-
-				//the borrow checker does not acknowledge that .clear() drops all borrowed references, so we have to force it to
-				trans_mem.clear();
-				event_keys.clear();
-				event_vals.clear();
-				event_keys_mem = unsafe {std::mem::transmute(event_keys)};
-				event_vals_mem = unsafe {std::mem::transmute(event_vals)};
 
 				} else {util::mismatch_spec(server_state, file!(), line!())}
 				} else {util::mismatch_spec(server_state, file!(), line!())}
