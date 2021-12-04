@@ -165,6 +165,18 @@ pub fn find_field_u32(key : &'static str, server_state : &mut SneakyMouseServer,
 		None => None
 	}
 }
+pub fn find_field_u64(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<u64> {
+	match find_field_u8s(key, keys, vals) {
+		Some(raw) => match to_u64(raw) {
+			Some(i) => Some(i),
+			None => {
+				invalid_value(server_state, event_name, event_uid, keys, vals, key);
+				None
+			}
+		}
+		None => None
+	}
+}
 pub fn find_field_i32(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<i32> {
 	match find_field_u8s(key, keys, vals) {
 		Some(raw) => match to_i32(raw) {
@@ -202,18 +214,20 @@ pub fn check_user_has_enough_currency(server_state : &mut SneakyMouseServer, use
 	} else {
 		let mut cmdget = redis::Cmd::hget(user_key, currency_field);
 
-		let val : redis::Value = auto_retry_cmd(server_state, &mut cmdget)?;
-		if let Some(v) = get_from_val_i64(val) {
+		let val = auto_retry_cmd(server_state, &mut cmdget)?;
+		if let redis::Value::Data(data) = val {
+		if let Some(v) = to_i64(&data) {
 			if v + (delta as i64) >= 0 {
 				return Some(true);
 			}
+		}
 		}
 	}
 	return Some(false);
 }
 
 
-pub fn save_cheese(server_state : &mut SneakyMouseServer, cmd : &mut redis::Cmd, cheese : &CheeseData) {
+pub fn save_cheese(server_state : &mut SneakyMouseServer, cmd : &mut redis::Pipeline, cheese : &CheeseData) {
 	cmd.arg(FIELD_IMAGE).arg(&cheese.image);
 	if let Some(s) = &cheese.radicalizes {
 		cmd.arg(FIELD_RADICALIZES).arg(s);
@@ -345,8 +359,7 @@ pub fn connect_to(redis_address : &str) -> Option<redis::Connection> {
 	return None;
 }
 
-// #[derive(Clone, Copy, Debug)]
-pub fn auto_retry_cmd<T : redis::FromRedisValue>(server_state : &mut event::SneakyMouseServer, cmd : &redis::Cmd) -> Option<T> {
+pub fn auto_retry_pipe(server_state : &mut event::SneakyMouseServer, cmd : &redis::Pipeline) -> Option<redis::Value> {
 	//Only returns None if a connection cannot be established to the server, only course of action is to shut down until an admin intervenes
 	//NOTE: this can trigger a long thread::sleep() if reconnection fails
 	match cmd.query(&mut server_state.redis_con) {
@@ -362,8 +375,35 @@ pub fn auto_retry_cmd<T : redis::FromRedisValue>(server_state : &mut event::Snea
 				print!("lost connection to the server: {}\n", error);
 				print!("attempting to reconnect\n");
 
-				let con = connect_to(&server_state.redis_address[..])?;
-				server_state.redis_con = con;
+				server_state.redis_con = connect_to(&server_state.redis_address[..])?;
+				match cmd.query(&mut server_state.redis_con) {
+					Ok(data) => return Some(data),
+					Err(error) => {
+						print!("connection immediately failed on retry, shutting down: {}\n", error);
+						return None
+					}
+				}
+			}
+		}
+	}
+}
+pub fn auto_retry_cmd(server_state : &mut event::SneakyMouseServer, cmd : &redis::Cmd) -> Option<redis::Value> {
+	//Only returns None if a connection cannot be established to the server, only course of action is to shut down until an admin intervenes
+	//NOTE: this can trigger a long thread::sleep() if reconnection fails
+	match cmd.query(&mut server_state.redis_con) {
+		Ok(data) => return Some(data),
+		Err(error) => match error.kind() {
+			redis::ErrorKind::InvalidClientConfig => {
+				panic!("fatal error: the redis command was invalid {}\n", error);
+			}
+			redis::ErrorKind::TypeError => {
+				panic!("fatal error: TypeError thrown by redis {}\n", error);
+			}
+			_ => {
+				print!("lost connection to the server: {}\n", error);
+				print!("attempting to reconnect\n");
+
+				server_state.redis_con = connect_to(&server_state.redis_address[..])?;
 				match cmd.query(&mut server_state.redis_con) {
 					Ok(data) => return Some(data),
 					Err(error) => {
@@ -379,7 +419,7 @@ pub fn auto_retry_cmd<T : redis::FromRedisValue>(server_state : &mut event::Snea
 pub fn send_error(server_state : &mut SneakyMouseServer, error : &String) {
 	//Unlike all of our other functions, this one will only attempt to send the error to redis once and then move on if it fails
 	let mut cmd = redis::cmd("XADD");
-	cmd.arg(EVENT_DEBUG_ERROR).arg("*");
+	cmd.arg(OUT_EVENT_DEBUG_ERROR).arg("*");
 	cmd.arg(FIELD_MESSAGE).arg(error);
 
 	match cmd.query::<redis::Value>(&mut server_state.redis_con) {

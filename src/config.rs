@@ -25,6 +25,31 @@ pub fn generate_default_cheese() -> CheeseData {
     }
 }
 
+// pub struct HatData {
+//     pub image : Vec<u8>,
+//     pub radicalizes : Option<Vec<u8>>,
+//     pub time_min : u32,//milisec
+//     pub time_max : u32,//milisec
+//     pub size : i32,
+//     pub original_size : i32,
+//     pub squirrel_mult : f32,
+//     pub silent : bool,
+//     pub exclusive : bool,
+// }
+// pub fn generate_default_hat() -> HatData {
+//     CheeseData{
+//         image : Vec::from(&b"danipls"[..]),
+//         radicalizes : Some(Vec::from(&b"danipls"[..])),
+//         time_min : 4*60*1000,
+//         time_max : 5*60*1000,
+//         size : 1,
+//         original_size : 1,
+//         squirrel_mult : 0.0,
+//         silent : false,
+//         exclusive : false,
+//     }
+// }
+
 pub const REDIS_STREAM_READ_COUNT : usize = 55;
 pub const REDIS_STREAM_TIMEOUT_MAX : f64 = 5.0;
 pub const REDIS_TIME_BETWEEN_RETRY_CON : u64 = 5;
@@ -48,14 +73,19 @@ pub const VAL_NULL : &str = "null";
 // pub const VAL_TRUE : &str = "true";
 // pub const VAL_FALSE : &str = "false";
 
-pub const EVENT_DEBUG_CONSOLE : &[u8] = b"debug:console";
-pub const EVENT_DEBUG_ERROR : &[u8] = b"debug:error";
-pub const EVENT_SHUTDOWN : &[u8] = b"sm:shutdown";
-pub const EVENT_CHEESE_REQUEST : &[u8] = b"sm-cheese:request";
-pub const EVENT_CHEESE_COLLECT : &[u8] = b"sm-cheese:collect";
-pub const EVENT_CHEESE_SPAWN : &[u8] = b"sm-cheese:spawn";
-pub const EVENT_CHEESE_UPDATE : &[u8] = b"sm-cheese:update";
-pub const EVENT_CHEESE_COLLECTED : &[u8] = b"sm-cheese:collected";
+
+pub const  IN_EVENT_DEBUG_CONSOLE : &[u8] = b"debug:console";
+pub const OUT_EVENT_DEBUG_ERROR : &[u8] = b"debug:error";
+pub const  IN_EVENT_SHUTDOWN : &[u8] = b"sm:shutdown";
+
+pub const  IN_EVENT_CHEESE_GIVE : &[u8] = b"sm-cheese:give";
+
+pub const  IN_EVENT_CHEESE_SPAWN : &[u8] = b"sm-cheese:spawn";
+pub const OUT_EVENT_CHEESE_UPDATE : &[u8] = b"sm-cheese:update";
+pub const  IN_EVENT_CHEESE_REQUEST : &[u8] = b"sm-cheese:request";
+pub const OUT_EVENT_CHEESE_QUEUE : &[u8] = b"sm-cheese:queue";
+pub const  IN_EVENT_CHEESE_COLLECT : &[u8] = b"sm-cheese:collect";
+pub const  IN_EVENT_CHEESE_DESPAWN : &[u8] = b"sm-cheese:despawn";
 
 
 pub const FIELD_TRIGGER : &str = "trigger";
@@ -66,6 +96,7 @@ pub const FIELD_USER_UID : &str = "user-uid";
 pub const FIELD_USER_NAME : &str = "user-name";
 pub const FIELD_ROOM_UID : &str = "room-uid";
 pub const FIELD_CHEESE_TOTAL : &str = "cheese";
+pub const FIELD_GEM_TOTAL : &str = "gems";
 
 pub const FIELD_CHEESE_ID : &str = "cheese-id";
 pub const FIELD_CHEESE_UID : &str = "cheese-uid";
