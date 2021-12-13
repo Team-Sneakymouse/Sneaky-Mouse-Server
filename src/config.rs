@@ -78,16 +78,16 @@ pub const VAL_CHEESE_STRAT_SATURATE : &[u8] = b"saturate";
 // pub const VAL_FALSE : &str = "false";
 
 
-pub const  IN_EVENT_CHEESE_GIVE : &[u8] = b"sm-cheese:give";
-pub const OUT_EVENT_CHEESE_AWARD : &[u8] = b"sm-cheese:award";
 pub const  IN_EVENT_DEBUG_CONSOLE : &[u8] = b"debug:console";
 pub const OUT_EVENT_DEBUG_ERROR : &[u8] = b"debug:error";
 pub const  IN_EVENT_SHUTDOWN : &[u8] = b"sm:shutdown";
+pub const  IN_EVENT_CHEESE_GIVE : &[u8] = b"sm-cheese:give";
+pub const OUT_EVENT_CHEESE_AWARD : &[u8] = b"sm-cheese:award";
 
-pub const  IN_EVENT_CHEESE_SPAWN : &[u8] = b"sm-cheese:spawn";
-pub const OUT_EVENT_CHEESE_UPDATE : &[u8] = b"sm-cheese:update";
+pub const  IN_EVENT_CHEESE_SPAWN   : &[u8] = b"sm-cheese:spawn";
+pub const OUT_EVENT_CHEESE_UPDATE  : &[u8] = b"sm-cheese:update";
 pub const  IN_EVENT_CHEESE_REQUEST : &[u8] = b"sm-cheese:request";
-pub const OUT_EVENT_CHEESE_QUEUE : &[u8] = b"sm-cheese:queue";
+pub const OUT_EVENT_CHEESE_QUEUE   : &[u8] = b"sm-cheese:queue";
 pub const  IN_EVENT_CHEESE_COLLECT : &[u8] = b"sm-cheese:collect";
 pub const  IN_EVENT_CHEESE_DESPAWN : &[u8] = b"sm-cheese:despawn";
 

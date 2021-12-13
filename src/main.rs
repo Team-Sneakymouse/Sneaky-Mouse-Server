@@ -1,13 +1,13 @@
 //By Mami
 #![allow(unused_variables)]
+#![allow(unused_imports)]
 #![allow(unused_parens)]//why tf is this a default warning
 extern crate redis;
-extern crate getrandom;
 extern crate rand_pcg;
 extern crate rand;
 
-
 mod config;
+mod http_server;
 mod util;
 mod event;
 use event::*;
@@ -39,7 +39,7 @@ fn server_main() -> Option<bool> {
 
 	let events = get_event_list();
 
-	let mut last_ids = Vec::<Vec<u8>>::new();//I wish I could jointly allocate these
+	let mut last_ids = Vec::<Vec<u8>>::new();
 	if !config::DEBUG_FLOOD_ALL_STREAMS {//get last ids from redis
 		let mut cmd = redis::cmd("HMGET");
 		cmd.arg(config::REDIS_LAST_ID_PREFIX);
@@ -47,7 +47,10 @@ fn server_main() -> Option<bool> {
 			cmd.arg(event);
 		}
 
+
 		let ids_data = util::auto_retry_cmd(server_state, &cmd)?;
+
+
 		if let redis::Value::Bulk(ids) = ids_data {
 			for id in ids {
 				match id {
@@ -78,10 +81,10 @@ fn server_main() -> Option<bool> {
 		last_time = cur_time;
 		let timeout = server_update(server_state, &mut trans_mem, delta)?;
 
-		let opts = redis::streams::StreamReadOptions::default().count(config::REDIS_STREAM_READ_COUNT).block((timeout*1000.0) as usize);
 
+		let opts = redis::streams::StreamReadOptions::default().count(config::REDIS_STREAM_READ_COUNT).block((timeout*1000.0) as usize);
 		let mut cmd = redis::Cmd::xread_options(&events[..], &last_ids[..], &opts);
-		let response : redis::Value = util::auto_retry_cmd(server_state, &mut cmd)?;
+		let response = util::auto_retry_cmd(server_state, &mut cmd)?;
 
 
 		if let redis::Value::Bulk(stream_responses) = &response {
@@ -94,6 +97,7 @@ fn server_main() -> Option<bool> {
 				if let redis::Value::Data(message_id_raw) = &message[0] {
 				if let redis::Value::Bulk(message_body) = &message[1] {
 
+				//clear all transient memory
 				trans_mem.clear();
 
 				//the borrow checker does not acknowledge that .clear() drops all borrowed references, so we have to force it to
@@ -134,6 +138,7 @@ fn server_main() -> Option<bool> {
 
 
 				server_event_received(server_state, &stream_name_raw, message_id_raw, &event_keys[..], &event_vals[..], &mut trans_mem)?;
+
 
 				} else {util::mismatch_spec(server_state, file!(), line!())}
 				} else {util::mismatch_spec(server_state, file!(), line!())}

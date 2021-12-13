@@ -12,6 +12,7 @@ pub struct SneakyMouseServer<'a> {
 	pub redis_address : &'a str,
 	pub rng : Pcg64,
 	pub cur_time : f64,
+
 	pub cheese_timeouts : Vec<f64>,
 	pub cheese_uids : Vec<u64>,
 	pub cheese_rooms : Vec<Vec<u8>>,//I don't like this
@@ -68,8 +69,8 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 				if let Some(src_uid_raw) = find_field_u8s(FIELD_SRC_UID, keys, vals) {
 					let src_uuid = lookup_user_uuid(server_state, src_uid_raw)?;
 
-					let cheese_cost_src = find_field_i32(FIELD_USER_UID, server_state, event_name, event_uid, keys, vals).unwrap_or(0).clamp(-i32::MAX/2, i32::MAX/2);
-					let gem_cost_src = find_field_i32(FIELD_USER_UID, server_state, event_name, event_uid, keys, vals).unwrap_or(0).clamp(-i32::MAX/2, i32::MAX/2);
+					let cheese_cost_src = find_field_i32(FIELD_CHEESE_COST, server_state, event_name, event_uid, keys, vals).unwrap_or(0).clamp(-i32::MAX/2, i32::MAX/2);
+					let gem_cost_src = find_field_i32(FIELD_GEM_COST, server_state, event_name, event_uid, keys, vals).unwrap_or(0).clamp(-i32::MAX/2, i32::MAX/2);
 
 					let src_key = push_u64_prefix(trans_mem, KEY_USER_PREFIX, src_uuid);
 
@@ -321,26 +322,25 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_CHEESE_UID)}
 		}
 		IN_EVENT_CHEESE_DESPAWN => {
-			if let Some(cheese_uid) = find_field_u64(FIELD_CHEESE_UID, server_state, event_name, event_uid, keys, vals) {
+			if let Some(room) = find_field_u8s(FIELD_ROOM_UID, keys, vals) {
 
-			for (i, cur_cheese_uid) in server_state.cheese_uids.iter().enumerate() {
-				if *cur_cheese_uid == cheese_uid {
+			for (i, cur_room) in server_state.cheese_rooms.iter().enumerate() {
+				if *cur_room == room {
 					server_state.cheese_timeouts.swap_remove(i);
 					server_state.cheese_uids.swap_remove(i);
-					let room = server_state.cheese_rooms.swap_remove(i);
+					server_state.cheese_rooms.swap_remove(i);
 					server_state.cheese_ids.swap_remove(i);
-
-					let mut cmd = redis::cmd("XADD");
-					cmd.arg(OUT_EVENT_CHEESE_UPDATE).arg("*");
-					cmd.arg(FIELD_ROOM_UID).arg(room);
-
-
-					auto_retry_cmd(server_state, &mut cmd)?;
-
 
 					break;
 				}
 			}
+			let mut cmd = redis::cmd("XADD");
+			cmd.arg(OUT_EVENT_CHEESE_UPDATE).arg("*");
+			cmd.arg(FIELD_ROOM_UID).arg(room);
+
+
+			auto_retry_cmd(server_state, &mut cmd)?;
+
 
 			} else {missing_field(server_state, event_name, event_uid, keys, vals, FIELD_CHEESE_UID)}
 		},
@@ -357,19 +357,16 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 		},
 		IN_EVENT_SHUTDOWN => {
 			print!("shutdown request acknowledged, closing the server\n");
-			//TODO: pipeline this above all else, a slow closing server is unacceptable
 
+			let mut pipe = redis::pipe();
 			for i in 0..server_state.cheese_rooms.len() {
-
-				let mut cmd_xadd = redis::cmd("XADD");
-				cmd_xadd.arg(OUT_EVENT_CHEESE_UPDATE).arg("*");
-				cmd_xadd.arg(FIELD_ROOM_UID).arg(&server_state.cheese_rooms[i]);
-
-
-				auto_retry_cmd(server_state, &mut cmd_xadd)?;
-
-
+				pipe.cmd("XADD");
+				pipe.arg(OUT_EVENT_CHEESE_UPDATE).arg("*");
+				pipe.arg(FIELD_ROOM_UID).arg(&server_state.cheese_rooms[i]);
 			}
+
+			auto_retry_pipe(server_state, &mut pipe)?;
+
 			return None
 		}
 		_ => {

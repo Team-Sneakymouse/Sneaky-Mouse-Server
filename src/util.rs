@@ -80,7 +80,7 @@ pub fn to_i32(mem : &[u8]) -> Option<i32> {//eats leading 0s
 		return Some(i);
 	}
 }
-pub fn to_f32(mem : &[u8]) -> Option<f32> {//eats leading 0s
+pub fn to_f32(mem : &[u8]) -> Option<f32> {
 	if let Ok(s) = std::str::from_utf8(mem) {
 	if let Ok(v) = s.parse::<f32>() {
 	return Some(v);
@@ -88,7 +88,7 @@ pub fn to_f32(mem : &[u8]) -> Option<f32> {//eats leading 0s
 	}
 	return None;
 }
-pub fn to_bool(mem : &[u8]) -> Option<bool> {//eats leading 0s
+pub fn to_bool(mem : &[u8]) -> Option<bool> {
 	match mem {
 		b"true" => Some(true),
 		b"false" => Some(false),
