@@ -7,6 +7,8 @@ extern crate rand_pcg;
 extern crate rand;
 
 mod config;
+mod db;
+mod com;
 mod http_server;
 mod util;
 mod event;
@@ -14,19 +16,33 @@ use event::*;
 use rand::{Rng, RngCore, SeedableRng};
 use std::time::{Instant, Duration};
 use rand_pcg::*;
+use config::*;
 
 
-fn server_main() -> Option<bool> {
-	let redis_address: String;
-	match std::env::var("REDIS_ADDRESS") {
-		Ok(val) => redis_address = val,
-		Err(_) => redis_address = String::from("redis://127.0.0.1/"),
-	}
-	let con = util::connect_to(&redis_address[..])?;
+fn server_main() -> Result<(), ()> {
+	let redis_address_mem = match std::env::var("REDIS_ADDRESS") {
+		Ok(v) => Some(v),
+		Err(_) => None,
+	};
+	let redis_address = match &redis_address_mem {
+		Some(v) => &v[..],
+		None => "redis://127.0.0.1/",
+	};
+	let http_address_mem = match std::env::var("HTTP_ADDRESS") {
+		Ok(v) => Some(v),
+		Err(_) => None,
+	};
+	let http_address = match &http_address_mem {
+		Some(v) => &v[..],
+		None => "127.0.0.1:80",
+	};
 
-	let mut server_state_mem = SneakyMouseServer{
-		redis_con : con,
-		redis_address : &redis_address[..],
+	let mut server_state = SneakyMouseServer{
+		db: LayerData{
+			redis_con : com::connect_to(redis_address)?,
+			redis_address : redis_address,
+			pipe: redis::Pipeline::new(),
+		},
 		rng : Pcg64::from_entropy(),
 		cur_time : 0.0,
 		cheese_timeouts : Vec::new(),
@@ -34,38 +50,32 @@ fn server_main() -> Option<bool> {
 		cheese_rooms : Vec::new(),
 		cheese_ids : Vec::new(),
 	};
+	let mut http_server_state = HTTPServer{
+		addr: http_address,
+		disabled: false,
+		listener: None,
+	};
 	let mut trans_mem = Vec::new();
-	let server_state = &mut server_state_mem;
 
 	let events = get_event_list();
 
 	let mut last_ids = Vec::<Vec<u8>>::new();
-	if !config::DEBUG_FLOOD_ALL_STREAMS {//get last ids from redis
-		let mut cmd = redis::cmd("HMGET");
-		cmd.arg(config::REDIS_LAST_ID_PREFIX);
-		for event in events.iter() {
-			cmd.arg(event);
-		}
+	server_state.db.pipe.cmd("HMGET");
+	server_state.db.pipe.arg(layer::key::LAST_ID);
+	for event in events.iter() {
+		server_state.db.pipe.arg(event);
+	}
 
-
-		let ids_data = util::auto_retry_cmd(server_state, &cmd)?;
-
-
-		if let redis::Value::Bulk(ids) = ids_data {
-			for id in ids {
-				match id {
-					redis::Value::Data(id_str) => last_ids.push(id_str),
-					redis::Value::Nil => last_ids.push(config::REDIS_LAST_ID_DEFAULT.as_bytes().to_vec()),
-					_ => util::mismatch_spec(server_state, file!(), line!())
-				}
+	if let redis::Value::Bulk(ids) = com::auto_retry_flush_pipe(&mut server_state.db)? {
+		for id in ids {
+			match id {
+				redis::Value::Data(id_str) => last_ids.push(id_str),
+				redis::Value::Nil => last_ids.push(layer::default::LAST_ID.as_bytes().to_vec()),
+				_ => db::mismatch_spec(&mut server_state.db, file!(), line!())
 			}
-		} else {
-			util::mismatch_spec(server_state, file!(), line!())
 		}
 	} else {
-		for _ in events.iter() {
-			last_ids.push(b"0-0".to_vec());
-		}
+		db::mismatch_spec(&mut server_state.db, file!(), line!())
 	}
 
 	let mut last_time = Instant::now();
@@ -73,18 +83,21 @@ fn server_main() -> Option<bool> {
 	let mut event_keys_mem : Vec<&[u8]> = Vec::<&[u8]>::new();
 	let mut event_vals_mem : Vec<&[u8]> = Vec::<&[u8]>::new();
 	loop {
-		let cur_time = Instant::now();
-		let delta : f64 = match cur_time.checked_duration_since(last_time) {
-			Some(dur) => dur.as_secs_f64(),
-			None => 0.0,
-		};
-		last_time = cur_time;
-		let timeout = server_update(server_state, &mut trans_mem, delta)?;
+		let delta : f64;
+		{
+			let cur_time = Instant::now();
+			delta = match cur_time.checked_duration_since(last_time) {
+				Some(dur) => dur.as_secs_f64(),
+				None => 0.0,
+			};
+			last_time = cur_time;
+		}
 
+		let timeout = server_update(&mut server_state, &mut trans_mem, delta)?;
 
-		let opts = redis::streams::StreamReadOptions::default().count(config::REDIS_STREAM_READ_COUNT).block((timeout*1000.0) as usize);
-		let mut cmd = redis::Cmd::xread_options(&events[..], &last_ids[..], &opts);
-		let response = util::auto_retry_cmd(server_state, &mut cmd)?;
+		let opts = redis::streams::StreamReadOptions::default().count(layer::STREAM_READ_COUNT).block((timeout*1000.0) as usize);
+		server_state.db.pipe.xread_options(&events[..], &last_ids[..], &opts);
+		let response = com::auto_retry_flush_pipe(&mut server_state.db)?;
 
 
 		if let redis::Value::Bulk(stream_responses) = &response {
@@ -116,8 +129,8 @@ fn server_main() -> Option<bool> {
 					event_keys.push(k);
 					event_vals.push(v);
 
-					} else {util::mismatch_spec(server_state, file!(), line!())}
-					} else {util::mismatch_spec(server_state, file!(), line!())}
+					} else {db::mismatch_spec(&mut server_state.db, file!(), line!())}
+					} else {db::mismatch_spec(&mut server_state.db, file!(), line!())}
 				}
 
 
@@ -126,30 +139,30 @@ fn server_main() -> Option<bool> {
 				last_ids[i].clear();
 				last_ids[i].extend(&message_id_raw[..]);//this avoids allocating
 
-				if !config::DEBUG_FLOOD_ALL_STREAMS {
-					let mut cmd = redis::cmd("HMSET");
-					cmd.arg(config::REDIS_LAST_ID_PREFIX).arg(&stream_name_raw).arg(&last_ids[i]);
+				server_state.db.pipe.cmd("HMSET").ignore();
+				server_state.db.pipe.arg(layer::key::LAST_ID).arg(&stream_name_raw).arg(&last_ids[i]);
 
-					if let None = util::auto_retry_cmd(server_state, &mut cmd) {
-						util::send_error(server_state, &format!("the last consumed event was not saved! it had id {}\n", String::from_utf8_lossy(&last_ids[i])));
-						return None;
-					}
-				}
+				server_event_received(&mut server_state, &stream_name_raw, message_id_raw, &event_keys[..], &event_vals[..], &mut trans_mem)?;
 
 
-				server_event_received(server_state, &stream_name_raw, message_id_raw, &event_keys[..], &event_vals[..], &mut trans_mem)?;
-
-
-				} else {util::mismatch_spec(server_state, file!(), line!())}
-				} else {util::mismatch_spec(server_state, file!(), line!())}
-				} else {util::mismatch_spec(server_state, file!(), line!())}
+				} else {db::mismatch_spec(&mut server_state.db, file!(), line!())}
+				} else {db::mismatch_spec(&mut server_state.db, file!(), line!())}
+				} else {db::mismatch_spec(&mut server_state.db, file!(), line!())}
 			}
-			} else {util::mismatch_spec(server_state, file!(), line!())}
-			} else {util::mismatch_spec(server_state, file!(), line!())}
-			} else {util::mismatch_spec(server_state, file!(), line!())}
+			} else {db::mismatch_spec(&mut server_state.db, file!(), line!())}
+			} else {db::mismatch_spec(&mut server_state.db, file!(), line!())}
+			} else {db::mismatch_spec(&mut server_state.db, file!(), line!())}
 		}
 		} else if let redis::Value::Nil = response {
 			print!("no events received before timeout: trying again...\n");
+		}
+
+		{
+			let output = http_server::poll(&mut http_server_state, &mut trans_mem);
+
+			if output.shutdown {
+				return Ok(());
+			}
 		}
 	}
 }

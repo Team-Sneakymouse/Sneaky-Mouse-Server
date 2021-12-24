@@ -3,90 +3,163 @@ use std::io;
 use std::io::prelude::*;
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::time::{Duration};
 
-
-struct HTTPServerOutput {
-	do_shutdown: bool,
-}
+use crate::util::*;
+use crate::config::*;
 
 struct Request<'a> {
 	http_version: &'a str,
 	method: &'a str,
 	path: &'a str,
 }
+struct Response {
+	// content: Option<&'a [u8]>,
+	// header: &'a str,
+	status: &'static str,
+}
 
-fn http_server_loop(output: &mut HTTPServerOutput) -> io::Result<()> {
-	//NOTE: this code is extremely lazy with error handling,
-	// println!("Starting server...");
-	let mut _trans_mem = String::new();
-	let trans_mem = &mut _trans_mem;
+pub fn poll(http_server: &mut HTTPServer, trans_mem: &mut Vec<u8>) -> HTTPServerOutput {
+	//NOTE: the following code does not correctly timeout a slow connection, enabling slow loris attacks if this server were exposed to the internet; the fix would be something like manually implementing tcp packet buffering with a timer, or dig into the specifics of rust tcp to see if such a packet buffering system is already available
+	//multithreading this code would aleviate this vulnerability but not get rid of it (an attacker could spin up infinite threads)
+	let mut output = HTTPServerOutput{
+		shutdown: false,
+	};
+	while !http_server.disabled {
+		if let Some(listener) = &http_server.listener {
+			let (mut tcpstream, addr) = match listener.accept() {
+				Ok(s) => s,
+				Err(e) => match e.kind() {
+					io::ErrorKind::WouldBlock => break,
+					_ => {
+						print!("network error: failed to accept on network listener, got error '{}'\n", e);
 
-	let listener = TcpListener::bind("127.0.0.1:8001")?;
-	// println!("Server started!");
-	for stream in listener.incoming() {
-		match stream {
-			Ok(_stream) => {
-				trans_mem.clear();
-				let mut stream = _stream;
+						http_server.listener = None;
+						break;
+					},
+				},
+			};
 
-				match stream.read_to_string(trans_mem) {
-					Err(e) => eprintln!("Error handling client: {}", e),
-					_ => (),
-				}
+			// match tcpstream.set_read_timeout(Some(Duration::from_millis((http::CONNECTION_TIMEOUT*1000.0) as u64))) {
+			// 	_ => (),
+			// }
+			// match tcpstream.set_write_timeout(Some(Duration::from_millis((http::CONNECTION_TIMEOUT*1000.0) as u64))) {
+			// 	_ => (),
+			// }
 
-				match parse_request(&trans_mem) {
-					Ok(request) => {
-						if request.method == "POST" && request.path == "/shutdown" {//POST /shutdown
-							output.do_shutdown = true;
+			let raw_request = match push_stream(trans_mem, &mut tcpstream) {
+				Ok(v) => v,
+				Err(e) => match e.kind() {
+					io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
+						print!("network warning: connection timeout from '{}', got error '{}'\n", addr, e);
+						break;
+					}
+					_ => {
+						print!("network warning: could not read tcp connection from '{}', got error '{}'\n", addr, e);
+						break;
+					},
+				},
+			};
+
+			match parse_request(raw_request) {
+				Ok(request) => {
+					if request.method == "POST" {//POST /shutdown
+						if request.path == "/shutdown" {
+							output.shutdown = true;
+
+							write_response(&mut tcpstream, trans_mem, Response{
+								// content: None,
+								status: http::status::OK,
+							});
+							break;
+						} else {
+							print!("network warning: received an unrecognized http request from '{}', contents:'{}'\n", addr, String::from_utf8_lossy(raw_request));
+
+							write_response(&mut tcpstream, trans_mem, Response{
+								// content: None,
+								status: http::status::NOT_FOUND,
+							});
 						}
-					},
-					Err(()) => {
-						eprintln!("Bad request: {}", &trans_mem);
-					},
-				}
-			},
-			Err(e) => eprintln!("Connection failed: {}", e),
-		}
-	}
-	Ok(())
-}
+					} else {
+						print!("network warning: received an unrecognized http request from '{}', contents:'{}'\n", addr, String::from_utf8_lossy(raw_request));
 
-pub fn handle_client(_stream: TcpStream, trans_mem: &mut String) -> io::Result<()> {
-	let mut stream = _stream;
-
-	stream.read_to_string(trans_mem)?;
-
-	match parse_request(&trans_mem) {
-		Ok(request) => {
-			if request.method == "POST" && request.path == "shutdown" {
-
+						write_response(&mut tcpstream, trans_mem, Response{
+							// content: None,
+							status: http::status::METHOD_NOT_ALLOWED,
+						});
+					}
+				},
+				Err(()) => {
+					print!("network warning: received a tcp request that was not valid http from '{}', contents:'{}'\n", addr, String::from_utf8_lossy(raw_request));
+				},
 			}
-		},
-		Err(()) => {
-			eprintln!("Bad request: {}", &trans_mem);
-		},
+		} else {
+			match TcpListener::bind(http_server.addr) {
+				Err(v) => {
+					print!("network error: failed to bind to '{}', got error '{}'", http_server.addr, v);
+					http_server.disabled = true;
+					break;
+				},
+				Ok(l) => {
+					match l.set_nonblocking(true) {
+						Err(e) => {
+							print!("network error: failed to bind to '{}', got error '{}'", http_server.addr, e);
+							http_server.disabled = true;
+							break;
+						},
+						Ok(()) => {
+							http_server.listener = Some(l);
+						},
+					}
+				},
+			}
+		};
 	}
-	Ok(())
+	return output;
 }
 
-fn parse_request(request: &String) -> Result<Request, ()> {
-	let mut parts = request.split(" ");
+fn parse_request(raw_request: &[u8]) -> Result<Request, ()> {
+	let request = match std::str::from_utf8(raw_request) {
+		Ok(v) => v,
+		Err(e) => return Err(()),
+	};
+	let mut parts = request.split(' ');
 	let method = match parts.next() {
-		Some(method) => method.trim(),
+		Some(v) => v.trim(),
 		None => return Err(()),
 	};
 	let path = match parts.next() {
-		Some(path) => path.trim(),
+		Some(v) => v.trim(),
 		None => return Err(()),
 	};
 	let http_version = match parts.next() {
-		Some(version) => version.trim(),
+		Some(v) => v.trim(),
 		None => return Err(()),
 	};
-	// let time = Local::now();
 	Ok(Request {
 		http_version: http_version,
 		method: method,
 		path: path,
 	})
 }
+
+fn encode_response<'a>(stack: &mut Vec<u8>, response: Response) -> &'a [u8] {
+	let start = stack.len();
+	stack.extend_from_slice(b"HTTP/1.0 ");
+	stack.extend_from_slice(response.status.as_bytes());
+	stack.extend_from_slice(b"\r\n");
+	let end = stack.len();
+	let ptr = stack.as_ptr();
+	return unsafe {
+		std::slice::from_raw_parts(ptr.add(start), end)
+	}
+}
+fn write_response(tcpstream: &mut TcpStream, trans_mem: &mut Vec<u8>, response: Response) {
+	match tcpstream.write_all(encode_response(trans_mem, response)) {
+		Ok(()) => (),
+		Err(e) => {
+
+		}
+	}
+}
+
