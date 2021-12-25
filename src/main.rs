@@ -160,13 +160,16 @@ fn server_main() -> Result<(), ()> {
 		{
 			let output = http_server::poll(&mut http_server_state, &mut trans_mem);
 
-			if output.shutdown {
-				return Ok(());
+			if output.shutdown {//This is the only intended exit point atm
+				return db::flush(&mut server_state.db, &mut trans_mem);
 			}
 		}
 	}
 }
 
 fn main() {
-	server_main();
+	match server_main() {
+		Ok(()) => print!("server has closed\n"),
+		Err(()) => print!("server has closed due to fatal error\n"),
+	};
 }

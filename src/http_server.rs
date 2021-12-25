@@ -40,26 +40,15 @@ pub fn poll(http_server: &mut HTTPServer, trans_mem: &mut Vec<u8>) -> HTTPServer
 				},
 			};
 
-			// match tcpstream.set_read_timeout(Some(Duration::from_millis((http::CONNECTION_TIMEOUT*1000.0) as u64))) {
-			// 	_ => (),
-			// }
-			// match tcpstream.set_write_timeout(Some(Duration::from_millis((http::CONNECTION_TIMEOUT*1000.0) as u64))) {
-			// 	_ => (),
-			// }
-
 			let raw_request = match push_stream(trans_mem, &mut tcpstream) {
 				Ok(v) => v,
-				Err(e) => match e.kind() {
-					io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
-						print!("network warning: connection timeout from '{}', got error '{}'\n", addr, e);
-						break;
-					}
-					_ => {
-						print!("network warning: could not read tcp connection from '{}', got error '{}'\n", addr, e);
-						break;
-					},
+				Err(e) => {
+					print!("network warning: could not read tcp connection from '{}', got error '{}'\n", addr, e);
+					break;
 				},
 			};
+
+			// print!("http: client '{}' sent request:\n {}", addr, String::from_utf8_lossy(raw_request));
 
 			match parse_request(raw_request) {
 				Ok(request) => {
@@ -114,6 +103,7 @@ pub fn poll(http_server: &mut HTTPServer, trans_mem: &mut Vec<u8>) -> HTTPServer
 				},
 			}
 		};
+		trans_mem.clear();
 	}
 	return output;
 }
@@ -142,21 +132,65 @@ fn parse_request(raw_request: &[u8]) -> Result<Request, ()> {
 		path: path,
 	})
 }
+fn push_stream<'a>(stack: &mut Vec<u8>, tcpstream: &mut TcpStream) -> std::io::Result<&'a[u8]> {
+	//TODO: improve the parsing here
+	let start = stack.len();
+
+	match tcpstream.set_read_timeout(Some(Duration::from_millis((http::CONNECTION_TIMEOUT*1000.0) as u64))) {
+		_ => (),
+	}
+	match tcpstream.set_write_timeout(Some(Duration::from_millis((http::CONNECTION_TIMEOUT*1000.0) as u64))) {
+		_ => (),
+	}
+	match tcpstream.set_nonblocking(false) {
+		_ => (),
+	}
+
+	loop {
+		let mut mem = [0; 1028];
+		let n = match tcpstream.read(&mut mem) {
+			Ok(n) => n,
+			Err(e) => match e.kind() {
+				io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
+					break;
+				},
+				_ => return Err(e),
+			}
+		};
+		if n > 0 {
+			stack.extend_from_slice(&mem[..n]);
+			if mem[n - 1] == 10 {break};
+		} else {
+			// break;
+		}
+	}
+	let end = stack.len();
+	let ptr = stack.as_ptr();
+	return unsafe {
+		Ok(std::slice::from_raw_parts(ptr.add(start), end))
+	}
+}
 
 fn encode_response<'a>(stack: &mut Vec<u8>, response: Response) -> &'a [u8] {
 	let start = stack.len();
 	stack.extend_from_slice(b"HTTP/1.0 ");
 	stack.extend_from_slice(response.status.as_bytes());
 	stack.extend_from_slice(b"\r\n");
+	stack.extend_from_slice(b"\r\n");
 	let end = stack.len();
 	let ptr = stack.as_ptr();
 	return unsafe {
-		std::slice::from_raw_parts(ptr.add(start), end)
+		std::slice::from_raw_parts(ptr.add(start), end - start)
 	}
 }
 fn write_response(tcpstream: &mut TcpStream, trans_mem: &mut Vec<u8>, response: Response) {
-	match tcpstream.write_all(encode_response(trans_mem, response)) {
-		Ok(()) => (),
+	let data = encode_response(trans_mem, response);
+	match tcpstream.write_all(data) {
+		Ok(()) => {
+			match tcpstream.flush() {
+				_ => (),
+			}
+		},
 		Err(e) => {
 
 		}

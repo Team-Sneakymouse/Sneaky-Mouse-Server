@@ -16,7 +16,7 @@ pub fn send_error(db: &mut LayerData, error: &String) {
 		Ok(_) => (),
 		Err(error) => match error.kind() {
 			redis::ErrorKind::InvalidClientConfig => {
-				panic!("fatal error: the redis command was formatted invalidly {}\n", error);
+				panic!("fatal error: the redis command was formatted invalidly, got error '{}'\n", error);
 			}
 			redis::ErrorKind::TypeError => {
 				panic!("fatal error: TypeError thrown by redis {}, this should not be possible since we are explicitly trying to prevent redis from doing any type conversions\n", error);
@@ -37,14 +37,14 @@ pub fn connect_to(redis_address: &str) -> Result<redis::Connection, ()> {
 		match redis::Client::open(redis_address) {
 			Ok(client) => match client.get_connection() {
 				Ok(con) => {
-					print!("successfully connected to server\n");
+					print!("successfully connected to '{}'\n", redis_address);
 					return Ok(con);
 				}
 				Err(error) => {
-					print!("failed to connect to '{}': {}\n", redis_address, error);
+					print!("redis warning: failed to connect to '{}', got error '{}'\n", redis_address, error);
 				}
 			}
-			Err(error) => panic!("could not parse redis url \'{}\': {}\n", redis_address, error)
+			Err(error) => panic!("fatal error: could not parse redis url \'{}\': {}\n", redis_address, error)
 		}
 		if timeout < layer::RETRY_CON_TIMEOUT {
 			std::thread::sleep(std::time::Duration::from_millis((layer::TIME_BETWEEN_RETRY_CON*1000.0) as u64));
@@ -54,7 +54,7 @@ pub fn connect_to(redis_address: &str) -> Result<redis::Connection, ()> {
 		}
 	}
 
-	print!("failed to connect to the redis server after {} attempts, shutting down: contact an admin to restart the server\n", attempts);
+	print!("fatal error: failed to connect to the redis server after {} attempts\n", attempts);
 	return Err(());
 }
 
@@ -62,10 +62,10 @@ pub fn auto_retry_flush_pipe(db: &mut LayerData) -> Result<redis::Value, ()> {
 	//Only returns None if a connection cannot be established to the server, only course of action is to shut down until an admin intervenes
 	//NOTE: there are a couple of panics for malformed programmer input, if this program is bug-free they will never trigger
 	//NOTE: this can trigger a long thread::sleep() if reconnection fails
-	match db.pipe.query(&mut db.redis_con) {
+	let ret = match db.pipe.query(&mut db.redis_con) {
 		Ok(data) => {
 			db.pipe.clear();
-			return Ok(data);
+			data
 		},
 		Err(error) => match error.kind() {
 			redis::ErrorKind::InvalidClientConfig => {
@@ -82,7 +82,7 @@ pub fn auto_retry_flush_pipe(db: &mut LayerData) -> Result<redis::Value, ()> {
 				match db.pipe.query(&mut db.redis_con) {
 					Ok(data) => {
 						db.pipe.clear();
-						return Ok(data);
+						data
 					},
 					Err(error) => {
 						print!("connection immediately failed on retry, shutting down: {}\n", error);
@@ -92,6 +92,15 @@ pub fn auto_retry_flush_pipe(db: &mut LayerData) -> Result<redis::Value, ()> {
 				}
 			}
 		}
+	};
+	if let redis::Value::Bulk(mut res) = ret {
+		if let Some(r) = res.pop() {
+			return Ok(r);
+		} else {
+			return Ok(redis::Value::Bulk(res));
+		}
+	} else {
+		panic!("fatal error: the redis response was unexpected\n");
 	}
 }
 

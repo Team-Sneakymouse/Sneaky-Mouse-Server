@@ -34,8 +34,8 @@ pub enum Currency {
 }
 #[derive(Copy, Clone)]
 pub enum LayerError {
-    FATAL, //(for now this is only thrown on lost connection)
-    NOT_FOUND,
+    Fatal, //(for now this is only thrown on lost connection)
+    NotFound,
 }
 
 pub struct UserData<'a> {
@@ -72,7 +72,7 @@ pub const CHEESE_TTL: f64 = 5.0*60.0*60.0;
 pub mod event {
     pub mod input {
         pub const DEBUG_CONSOLE: &[u8] = b"debug:console";
-        pub const SHUTDOWN: &[u8] = b"sm:shutdown";
+        // pub const SHUTDOWN: &[u8] = b"sm:shutdown";
         pub const CHEESE_GIVE: &[u8] = b"sm-cheese:give";
         pub const CHEESE_SPAWN  : &[u8] = b"sm-cheese:spawn";
         pub const CHEESE_REQUEST: &[u8] = b"sm-cheese:request";
@@ -86,15 +86,15 @@ pub mod event {
         pub const CHEESE_QUEUE  : &[u8] = b"sm-cheese:queue";
     }
     pub mod field {
-        pub const TRIGGER: &str = "trigger";
+        // pub const TRIGGER: &str = "trigger";
         pub const MESSAGE: &str = "message";
         pub const MOUSE_BODY: &str = "body";
         pub const MOUSE_HAT: &str = "hat";
         pub const USER_ID: &str = "user-id";
         pub const ROOM_ID: &str = "room-id";
         pub const USER_NAME: &str = "user-name";
-        pub const CHEESE_TOTAL: &str = "cheese";
-        pub const GEM_TOTAL: &str = "gems";
+        // pub const CHEESE_TOTAL: &str = "cheese";
+        // pub const GEM_TOTAL: &str = "gems";
         pub const CHEESE_DELTA: &str = "cheese-delta";
         pub const GEM_DELTA: &str = "gems-delta";
         pub const CHEESE_COST: &str = "cheese-cost";
@@ -122,7 +122,7 @@ pub mod event {
         pub const CHEESE_STRAT_SATURATE: &[u8] = b"saturate";
     }
     pub const CHEESE_SIZE_MAX: i32 = 555_555_555;
-    pub const TIMEOUT_MAX: f64 = 5.0;
+    pub const TIMEOUT_MAX: f64 = 0.5;
 }
 
 
@@ -179,7 +179,7 @@ pub mod http {
         pub const OK: &str ="200 OK";
         pub const NOT_FOUND: &str ="404 Not Found";
         pub const METHOD_NOT_ALLOWED: &str = "405 Method Not Allowed";
-        pub const BAD_REQUEST: &str = "400 Bad Request";
+        // pub const BAD_REQUEST: &str = "400 Bad Request";
     }
 }
 

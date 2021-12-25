@@ -35,11 +35,11 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 
 			let (dest_uuid, dest_user) = match db::get_user_from_id(&mut server_state.db, trans_mem, dest_id) {
 				Ok(v) => v,
-				Err(LayerError::NOT_FOUND) => {
+				Err(LayerError::NotFound) => {
 					missing_user(server_state, event_name, event_uid, keys, vals, field::DEST_ID);
 					return Ok(());
 				},
-				Err(LayerError::FATAL) => return Err(()),
+				Err(LayerError::Fatal) => return Err(()),
 			};
 
 
@@ -69,11 +69,11 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 
 					let (src_uuid, src_user) = match db::get_user_from_id(&mut server_state.db, trans_mem, src_id) {
 						Ok(v) => v,
-						Err(LayerError::NOT_FOUND) => {
+						Err(LayerError::NotFound) => {
 							missing_user(server_state, event_name, event_uid, keys, vals, field::DEST_ID);
 							return Ok(());
 						},
-						Err(LayerError::FATAL) => return Err(()),
+						Err(LayerError::Fatal) => return Err(()),
 					};
 
 					let cheese_cost_src = find_field_i32(field::CHEESE_COST, server_state, event_name, event_uid, keys, vals).unwrap_or(0).clamp(-i32::MAX/2, i32::MAX/2);
@@ -216,11 +216,11 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 
 			let (uuid, user) = match db::get_user_from_id(&mut server_state.db, trans_mem, user_id) {
 				Ok(v) => v,
-				Err(LayerError::NOT_FOUND) => {
+				Err(LayerError::NotFound) => {
 					missing_user(server_state, event_name, event_uid, keys, vals, field::USER_ID);
 					return Ok(());
 				},
-				Err(LayerError::FATAL) => return Err(()),
+				Err(LayerError::Fatal) => return Err(()),
 			};
 			let cheese = db::get_cheese_from_uuid(&mut server_state.db, trans_mem, cheese_uuid)?;
 

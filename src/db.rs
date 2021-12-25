@@ -218,7 +218,7 @@ pub fn get_user_from_uuid<'a>(db: &mut LayerData, trans_mem: &mut Vec<u8>, uuid:
 	let mut gems = 0;
 
 	if vals.len()%2 == 1 {mismatch_spec(db, file!(), line!());}
-	if vals.len() == 0 {return Err(LayerError::NOT_FOUND)}
+	if vals.len() == 0 {return Err(LayerError::NotFound)}
 
 	for i2 in 0..vals.len()/2 {
 		let i = i2*2;
@@ -274,7 +274,7 @@ pub fn get_user_from_uuid<'a>(db: &mut LayerData, trans_mem: &mut Vec<u8>, uuid:
 
 	} else {mismatch_spec(db, file!(), line!());}
 	}
-	return Err(LayerError::FATAL);
+	return Err(LayerError::Fatal);
 }
 pub fn get_or_create_user_from_id<'a>(db: &mut LayerData, trans_mem: &mut Vec<u8>, id: &[u8], screen_name: &[u8]) -> Result<(u64, UserData<'a>), ()> {
 	db.pipe.hget(key::USERUUID_HM, id);
@@ -282,12 +282,12 @@ pub fn get_or_create_user_from_id<'a>(db: &mut LayerData, trans_mem: &mut Vec<u8
 		redis::Value::Data(data) => match to_u64(&data) {
 			Some(uuid) => match get_user_from_uuid(db, trans_mem, uuid) {
 				Ok(user) => return Ok((uuid, user)),
-				Err(LayerError::NOT_FOUND) => {
+				Err(LayerError::NotFound) => {
 					invalid_db_entry_attempt_to_repair(db, key::USERUUID_HM.as_bytes(), id, &data);
 
 					uuid
 				},
-				Err(LayerError::FATAL) => return Err(()),
+				Err(LayerError::Fatal) => return Err(()),
 			},
 			None => {
 				invalid_db_entry_attempt_to_repair(db, key::USERUUID_HM.as_bytes(), id, &data);
@@ -332,16 +332,16 @@ pub fn get_user_from_id<'a>(db: &mut LayerData, trans_mem: &mut Vec<u8>, id: &[u
 		Ok(redis::Value::Data(data)) => match to_u64(&data) {
 			Some(uuid) => match get_user_from_uuid(db, trans_mem, uuid) {
 				Ok(user) => Ok((uuid, user)),
-				Err(LayerError::NOT_FOUND) => Err(LayerError::NOT_FOUND),
-				Err(LayerError::FATAL) => Err(LayerError::FATAL),
+				Err(LayerError::NotFound) => Err(LayerError::NotFound),
+				Err(LayerError::Fatal) => Err(LayerError::Fatal),
 			},
 			None => {
 				invalid_db_uuid(db, key::USERUUID_HM, id, &data);
-				Err(LayerError::NOT_FOUND)
+				Err(LayerError::NotFound)
 			},
 		},
-		Err(()) => Err(LayerError::FATAL),
-		_ => Err(LayerError::NOT_FOUND),
+		Err(()) => Err(LayerError::Fatal),
+		_ => Err(LayerError::NotFound),
 	};
 }
 

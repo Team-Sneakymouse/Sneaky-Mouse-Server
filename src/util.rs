@@ -18,7 +18,7 @@ pub fn push_u64_prefix<'a>(stack: &mut Vec<u8>, prefix: &str, i: u64) -> &'a[u8]
 	let end = stack.len();
 	let ptr = stack.as_ptr();
 	return unsafe {
-		std::slice::from_raw_parts(ptr.add(start), end)
+		std::slice::from_raw_parts(ptr.add(start), end - start)
 	}
 }
 pub fn push_u8s<'a>(stack: &mut Vec<u8>, src: &[u8]) -> &'a[u8] {
@@ -28,17 +28,7 @@ pub fn push_u8s<'a>(stack: &mut Vec<u8>, src: &[u8]) -> &'a[u8] {
 	let end = stack.len();
 	let ptr = stack.as_ptr();
 	return unsafe {
-		std::slice::from_raw_parts(ptr.add(start), end)
-	}
-}
-pub fn push_stream<'a, T: std::io::Read>(stack: &mut Vec<u8>, src: &mut T) -> std::io::Result<&'a[u8]> {
-	//The actual lifetime of the return value is the lifetime of the bytes in stack, which rust's borrow checker struggles to comprehend
-	let start = stack.len();
-	src.read_to_end(stack)?;
-	let end = stack.len();
-	let ptr = stack.as_ptr();
-	return unsafe {
-		Ok(std::slice::from_raw_parts(ptr.add(start), end))
+		std::slice::from_raw_parts(ptr.add(start), end - start)
 	}
 }
 
