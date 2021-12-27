@@ -74,6 +74,7 @@ fn _get_cheese_from_val<'a>(db: &mut LayerData, cheese_val: redis::Value, set_or
 	let mut size = layer::default::CHEESE_SIZE;
 	let mut original_size = None;
 	let mut squirrel_mult = 0.0;
+	let mut gems = 0;
 	let mut silent = false;
 	let mut exclusive = false;
 
@@ -114,6 +115,10 @@ fn _get_cheese_from_val<'a>(db: &mut LayerData, cheese_val: redis::Value, set_or
 			if let Some(s) = to_i32(&val) {
 				size = s;
 			} else {invalid_db_entry(db, key, key::cheese::SIZE, &val)}
+		} else if field == key::cheese::GEMS.as_bytes() {
+			if let Some(s) = to_i32(&val) {
+				gems = s;
+			} else {invalid_db_entry(db, key, key::cheese::SIZE, &val)}
 		} else if field == key::cheese::SQUIRREL_MULT.as_bytes() {
 			if let Some(mult) = to_f32(&val) {
 				squirrel_mult = mult;
@@ -149,6 +154,7 @@ fn _get_cheese_from_val<'a>(db: &mut LayerData, cheese_val: redis::Value, set_or
 			Some(s) => s,
 			None => size,
 		},
+		gems: gems,
         squirrel_mult: squirrel_mult,
         silent: silent,
         exclusive: exclusive,

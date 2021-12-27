@@ -57,6 +57,7 @@ pub struct CheeseData<'a> {
     pub size: i32,
     pub original_size: i32,
     pub squirrel_mult: f32,
+    pub gems: i32,
     pub silent: bool,
     pub exclusive: bool,
 }
@@ -116,6 +117,7 @@ pub mod event {
         pub const SILENT: &str = "silent";
         pub const SIZE_MULT: &str = "size-mult";
         pub const SIZE_INCR: &str = "size-add";
+        pub const GEMS: &str = "gems";
     }
     pub mod val {
         pub const CHEESE_STRAT_CANCEL: &[u8] = b"cancel";
@@ -123,6 +125,7 @@ pub mod event {
         pub const CHEESE_STRAT_SATURATE: &[u8] = b"saturate";
     }
     pub const CHEESE_SIZE_MAX: i32 = 555_555_555;
+    pub const CHEESE_GEMS_MAX: i32 = 555_555_555;
     pub const TIMEOUT_MAX: f64 = 0.5;
 }
 
@@ -166,6 +169,7 @@ pub mod layer {
             pub const TIME_MAX: &str = "time-max";
             pub const SIZE: &str = "size";
             pub const ORIGINAL_SIZE: &str = "original-size";
+            pub const GEMS: &str = "gems";
             pub const SQUIRREL_MULT: &str = "squirrel-mult";
             pub const SILENT: &str = "silent";
             pub const EXCLUSIVE: &str = "exclusive";
@@ -214,6 +218,7 @@ pub fn generate_default_cheese<'a>() -> CheeseData<'a> {
         time_max: layer::default::CHEESE_TIME_MAX,
         size: layer::default::CHEESE_SIZE,
         original_size: layer::default::CHEESE_SIZE,
+        gems: 0,
         squirrel_mult: 0.0,
         silent: false,
         exclusive: false,

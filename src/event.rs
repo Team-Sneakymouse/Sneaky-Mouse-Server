@@ -162,6 +162,7 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 			if cheese.original_size == 0 {
 				cheese.original_size = cheese.size;
 			}
+			cheese.gems = find_field_i32(field::GEMS, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.gems).clamp(-CHEESE_GEMS_MAX, CHEESE_GEMS_MAX);
 			cheese.silent = find_field_bool(field::SILENT, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.silent);
 			cheese.exclusive = find_field_bool(field::EXCLUSIVE, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.exclusive);
 
@@ -234,6 +235,7 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 
 
 			db::incr_user_currency(&mut server_state.db, trans_mem, uuid, &user, Currency::CHEESE, incr);
+			db::incr_user_currency(&mut server_state.db, trans_mem, uuid, &user, Currency::GEMS, cheese.gems);
 
 
 			} else {missing_field(server_state, event_name, event_uid, keys, vals, field::USER_ID)}
