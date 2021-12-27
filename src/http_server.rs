@@ -9,7 +9,7 @@ use crate::util::*;
 use crate::config::*;
 
 struct Request<'a> {
-	http_version: &'a str,
+	// http_version: &'a str,
 	method: &'a str,
 	path: &'a str,
 }
@@ -20,12 +20,12 @@ struct Response {
 }
 
 pub fn poll(http_server: &mut HTTPServer, trans_mem: &mut Vec<u8>) -> HTTPServerOutput {
-	//NOTE: the following code does not correctly timeout a slow connection, enabling slow loris attacks if this server were exposed to the internet; the fix would be something like manually implementing tcp packet buffering with a timer, or dig into the specifics of rust tcp to see if such a packet buffering system is already available
-	//multithreading this code would aleviate this vulnerability but not get rid of it (an attacker could spin up infinite threads)
+	//NOTE: the following code is insecure for a variety of reasons (no authentication, slow loris, no https, etc), do not open the port to the internet
 	let mut output = HTTPServerOutput{
 		shutdown: false,
 	};
 	while !http_server.disabled {
+		trans_mem.clear();
 		if let Some(listener) = &http_server.listener {
 			let (mut tcpstream, addr) = match listener.accept() {
 				Ok(s) => s,
@@ -40,12 +40,67 @@ pub fn poll(http_server: &mut HTTPServer, trans_mem: &mut Vec<u8>) -> HTTPServer
 				},
 			};
 
-			let raw_request = match push_stream(trans_mem, &mut tcpstream) {
-				Ok(v) => v,
+			match tcpstream.set_read_timeout(Some(Duration::from_millis((http::CONNECTION_TIMEOUT*1000.0) as u64))) {
+				Ok(n) => n,
 				Err(e) => {
-					print!("network warning: could not read tcp connection from '{}', got error '{}'\n", addr, e);
+					print!("network error: failed to set timeout on tcp stream, got error '{}'\n", e);
 					break;
-				},
+				}
+			}
+			match tcpstream.set_write_timeout(Some(Duration::from_millis((http::CONNECTION_TIMEOUT*1000.0) as u64))) {
+				Ok(n) => n,
+				Err(e) => {
+					print!("network error: failed to set timeout on tcp stream, got error '{}'\n", e);
+					break;
+				}
+			}
+			match tcpstream.set_nonblocking(false) {
+				Ok(n) => n,
+				Err(e) => {
+					print!("network error: failed to set_nonblocking on tcp stream, got error '{}'\n", e);
+					break;
+				}
+			}
+
+			let raw_request = {//read up to first line
+				let start = trans_mem.len();
+
+				let mut got_newline = false;
+				let mut mem = [0; 1028];
+				let mut total_read = 0;
+				while !got_newline && total_read < http::REQUEST_SIZE_MAX {
+					let n = match tcpstream.read(&mut mem) {
+						Ok(n) => n,
+						Err(e) => match e.kind() {
+							io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
+								print!("network warning: tcp stream from '{}' timed out, got error '{}'\n", addr, e);
+								continue;
+							},
+							_ => {
+								print!("network error: failed to read tcp stream, got error '{}'\n", e);
+								break;
+							},
+						}
+					};
+					for i in 0..n {
+						total_read += 1;
+						trans_mem.push(mem[i]);
+						if mem[i] == ASCII_NEWLINE {
+							got_newline = true;
+							break;
+						}
+					}
+				}
+				let end = trans_mem.len();
+				let ptr = trans_mem.as_ptr();
+				if got_newline {
+					unsafe {
+						std::slice::from_raw_parts(ptr.add(start), end - start)
+					}
+				} else {
+					print!("network warning: '{}' sent http request longer than cap, contents:'{}'\n", addr, String::from_utf8_lossy(&trans_mem[start..end]));
+					continue;
+				}
 			};
 
 			// print!("http: client '{}' sent request:\n {}", addr, String::from_utf8_lossy(raw_request));
@@ -60,6 +115,8 @@ pub fn poll(http_server: &mut HTTPServer, trans_mem: &mut Vec<u8>) -> HTTPServer
 								// content: None,
 								status: http::status::OK,
 							});
+
+							print!("network: received a POST /shutdown request from '{}', shutting down\n", addr);
 							break;
 						} else {
 							print!("network warning: received an unrecognized http request from '{}', contents:'{}'\n", addr, String::from_utf8_lossy(raw_request));
@@ -85,14 +142,14 @@ pub fn poll(http_server: &mut HTTPServer, trans_mem: &mut Vec<u8>) -> HTTPServer
 		} else {
 			match TcpListener::bind(http_server.addr) {
 				Err(v) => {
-					print!("network error: failed to bind to '{}', got error '{}'", http_server.addr, v);
+					print!("network error: failed to bind to '{}', got error '{}', disabling http server please contact admin", http_server.addr, v);
 					http_server.disabled = true;
 					break;
 				},
 				Ok(l) => {
 					match l.set_nonblocking(true) {
 						Err(e) => {
-							print!("network error: failed to bind to '{}', got error '{}'", http_server.addr, e);
+							print!("network error: failed to bind to '{}', got error '{}', disabling http server please contact admin", http_server.addr, e);
 							http_server.disabled = true;
 							break;
 						},
@@ -103,7 +160,6 @@ pub fn poll(http_server: &mut HTTPServer, trans_mem: &mut Vec<u8>) -> HTTPServer
 				},
 			}
 		};
-		trans_mem.clear();
 	}
 	return output;
 }
@@ -122,53 +178,15 @@ fn parse_request(raw_request: &[u8]) -> Result<Request, ()> {
 		Some(v) => v.trim(),
 		None => return Err(()),
 	};
-	let http_version = match parts.next() {
-		Some(v) => v.trim(),
-		None => return Err(()),
-	};
+	// let http_version = match parts.next() {
+	// 	Some(v) => v.trim(),
+	// 	None => return Err(()),
+	// };
 	Ok(Request {
-		http_version: http_version,
+		// http_version: http_version,
 		method: method,
 		path: path,
 	})
-}
-fn push_stream<'a>(stack: &mut Vec<u8>, tcpstream: &mut TcpStream) -> std::io::Result<&'a[u8]> {
-	//TODO: improve the parsing here
-	let start = stack.len();
-
-	match tcpstream.set_read_timeout(Some(Duration::from_millis((http::CONNECTION_TIMEOUT*1000.0) as u64))) {
-		_ => (),
-	}
-	match tcpstream.set_write_timeout(Some(Duration::from_millis((http::CONNECTION_TIMEOUT*1000.0) as u64))) {
-		_ => (),
-	}
-	match tcpstream.set_nonblocking(false) {
-		_ => (),
-	}
-
-	loop {
-		let mut mem = [0; 1028];
-		let n = match tcpstream.read(&mut mem) {
-			Ok(n) => n,
-			Err(e) => match e.kind() {
-				io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
-					break;
-				},
-				_ => return Err(e),
-			}
-		};
-		if n > 0 {
-			stack.extend_from_slice(&mem[..n]);
-			if mem[n - 1] == 10 {break};
-		} else {
-			// break;
-		}
-	}
-	let end = stack.len();
-	let ptr = stack.as_ptr();
-	return unsafe {
-		Ok(std::slice::from_raw_parts(ptr.add(start), end))
-	}
 }
 
 fn encode_response<'a>(stack: &mut Vec<u8>, response: Response) -> &'a [u8] {

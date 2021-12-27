@@ -6,6 +6,7 @@ use crate::util::*;
 use crate::db;
 use crate::com;
 use rand::{Rng};
+use chrono::{Utc};
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -59,7 +60,7 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 			let mut do_transaction = true;
 			if strat == 0 {
 				do_transaction = check_user_has_enough_currency(&dest_user, Currency::CHEESE, cheese_delta);
-			} else if strat == 0 {
+			} else if strat == 2 {
 				let (d, _) = check_user_saturating_currency(&dest_user, Currency::CHEESE, cheese_delta, 0);
 				cheese_delta = d;
 			}
@@ -82,7 +83,7 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 					let mut do_transaction = true;
 					if strat == 0 {
 						do_transaction = check_user_has_enough_currency(&src_user, Currency::CHEESE, -cheese_delta - cheese_cost_src);
-					} else if strat == 0 {
+					} else if strat == 2 {
 						let (d, is) = check_user_saturating_currency(&src_user, Currency::CHEESE, -cheese_delta, -cheese_cost_src);
 						do_transaction = is;
 						cheese_delta = -d;
@@ -287,6 +288,44 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 pub fn server_update(server_state : &mut SneakyMouseServer, trans_mem : &mut Vec<u8>, delta : f64) -> Result<f64, ()> {
 	server_state.cur_time += delta;
 
+	//check unix timestamp and do reset if enough time has passed
+	//the rule will be if now
+
+
+
+
+	let now_unix: i64 = Utc::now().timestamp(); //60*60*24
+	let last_reset_unix: i64 = server_state.last_reset_otherwise_server_genisis_unix;
+	/*
+	We want to add a day to the last_reset time and round it down so that it equals SM_RESET_EPOCH%SECS_IN_DAY + c*SECS_IN_DAY for some int c.
+	Given last_reset, SM_RESET_EPOCH, there exists c such that
+		SM_RESET_EPOCH%SECS_IN_DAY + (c - 1)*SECS_IN_DAY last_reset <= last_reset < SM_RESET_EPOCH%SECS_IN_DAY + c*SECS_IN_DAY.
+	We want to figure out the value of SM_RESET_EPOCH%SECS_IN_DAY + c*SECS_IN_DAY, so we want to find c.
+	So (c - 1)*SECS_IN_DAY <= last_reset - SM_RESET_EPOCH%SECS_IN_DAY
+		==> c - 1 <= (last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY
+		==> c <= (last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY + 1.
+	and last_reset < SM_RESET_EPOCH%SECS_IN_DAY + c*SECS_IN_DAY
+		==> last_reset - SM_RESET_EPOCH%SECS_IN_DAY < c*SECS_IN_DAY
+		==> (last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY < c.
+	Thus (last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY < c <= (last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY + 1.
+	Given a, a < floor(a + 1) <= a + 1.
+	Thus only int c that can satisfy the above property is 'floor((last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY + 1)'.
+	So c = floor((last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY + 1)
+			= floor((last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY) + 1
+			= (last_reset - SM_RESET_EPOCH%SECS_IN_DAY) '/' SECS_IN_DAY + 1 (where '/' is integer division)
+	*/
+	let c: i64 = (last_reset_unix - SM_RESET_EPOCH_UNIX%SECS_IN_DAY_UNIX)/SECS_IN_DAY_UNIX + 1;
+	let next_reset_unix: i64 = SM_RESET_EPOCH_UNIX%SECS_IN_DAY_UNIX + c*SECS_IN_DAY_UNIX;
+
+	if next_reset_unix <= now_unix {
+		//time going backwards as it does in unix time (leap seconds) will not affect this code since it always takes the first greater and setting that to the last reset time
+		server_state.last_reset_otherwise_server_genisis_unix = now_unix;
+		//do reset
+		db::daily_reset(&mut server_state.db, trans_mem, now_unix);
+	}
+
+
+		//check for cheese timeouts
 	let mut i = 0;
 	let mut next_timeout = event::TIMEOUT_MAX;
 	while i < server_state.cheese_timeouts.len() {

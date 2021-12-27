@@ -12,6 +12,7 @@ mod com;
 mod http_server;
 mod util;
 mod event;
+use chrono::{Utc};
 use event::*;
 use rand::{Rng, RngCore, SeedableRng};
 use std::time::{Instant, Duration};
@@ -39,16 +40,18 @@ fn server_main() -> Result<(), ()> {
 
 	let mut server_state = SneakyMouseServer{
 		db: LayerData{
-			redis_con : com::connect_to(redis_address)?,
-			redis_address : redis_address,
+			redis_con: com::connect_to(redis_address)?,
+			redis_address: redis_address,
 			pipe: redis::Pipeline::new(),
 		},
-		rng : Pcg64::from_entropy(),
-		cur_time : 0.0,
-		cheese_timeouts : Vec::new(),
-		cheese_uids : Vec::new(),
-		cheese_rooms : Vec::new(),
-		cheese_ids : Vec::new(),
+		rng: Pcg64::from_entropy(),
+		cur_time: 0.0,
+		last_reset_otherwise_server_genisis_unix: Utc::now().timestamp(),
+
+		cheese_timeouts: Vec::new(),
+		cheese_uids: Vec::new(),
+		cheese_rooms: Vec::new(),
+		cheese_ids: Vec::new(),
 	};
 	let mut http_server_state = HTTPServer{
 		addr: http_address,
@@ -56,6 +59,14 @@ fn server_main() -> Result<(), ()> {
 		listener: None,
 	};
 	let mut trans_mem = Vec::new();
+
+
+	match db::get_last_reset_unix(&mut server_state.db, &mut trans_mem) {
+		Ok(v) => server_state.last_reset_otherwise_server_genisis_unix = v,
+		Err(LayerError::NotFound) => (),
+		Err(LayerError::Fatal) => return Err(()),
+	}
+
 
 	let events = get_event_list();
 
@@ -80,10 +91,10 @@ fn server_main() -> Result<(), ()> {
 
 	let mut last_time = Instant::now();
 
-	let mut event_keys_mem : Vec<&[u8]> = Vec::<&[u8]>::new();
-	let mut event_vals_mem : Vec<&[u8]> = Vec::<&[u8]>::new();
+	let mut event_keys_mem: Vec<&[u8]> = Vec::<&[u8]>::new();
+	let mut event_vals_mem: Vec<&[u8]> = Vec::<&[u8]>::new();
 	loop {
-		let delta : f64;
+		let delta: f64;
 		{
 			let cur_time = Instant::now();
 			delta = match cur_time.checked_duration_since(last_time) {

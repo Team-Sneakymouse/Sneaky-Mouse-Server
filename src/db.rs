@@ -23,6 +23,12 @@ fn unrecognized_db_entry(db: &mut LayerData, key: &[u8], field: &[u8], val: &[u8
 	print!("{}\n", error);
 	com::send_error(db, &error);
 }
+fn invalid_db_key(db: &mut LayerData, key: &str, val: &[u8]) {
+	let error = format!("database warning: key '{}' had unexpected value '{}', will attempt to use default value", key, String::from_utf8_lossy(val));
+
+	print!("{}\n", error);
+	com::send_error(db, &error);
+}
 fn invalid_db_entry(db: &mut LayerData, key: &[u8], field: &str, val: &[u8]) {
 	let error = format!("database warning: key '{}:{}' had unexpected value '{}', will attempt to use default value", String::from_utf8_lossy(key), field, String::from_utf8_lossy(val));
 
@@ -353,7 +359,42 @@ pub fn incr_user_currency(db: &mut LayerData, trans_mem: &mut Vec<u8>, uuid: u64
 			Currency::GEMS => key::user::GEMS,
 		};
 		db.pipe.hincr(key, field, delta).ignore();
+		if let Currency::CHEESE = currency {
+			//increment rankings
+			let new_cheese = user.cheese + delta as i64;
+			db.pipe.zadd(key::GLOBAL_CHEESE_RANKING, key, new_cheese).ignore();
+			db.pipe.zincr(key::DAILY_CHEESE_RANKING, key, delta).ignore();
+		} else if let Currency::GEMS = currency {
+			//increment rankings
+			let new_gems = user.gems + delta as i64;
+			db.pipe.zadd(key::GLOBAL_GEMS_RANKING, key, new_gems).ignore();
+		}
 	}
+}
+
+pub fn get_last_reset_unix(db: &mut LayerData, trans_mem: &mut Vec<u8>) -> Result<i64, LayerError> {
+	db.pipe.get(key::DAILY_RESET_TIMESTAMP_UNIX);
+	return match com::auto_retry_flush_pipe(db) {
+		Ok(v) => match v {
+			redis::Value::Data(data) => match to_u64(&data[..]) {
+				Some(timestamp) => Ok(timestamp as i64),
+				None => {
+					invalid_db_key(db, key::DAILY_RESET_TIMESTAMP_UNIX, &data);
+					Err(LayerError::NotFound)
+				},
+			},
+			redis::Value::Nil => Err(LayerError::NotFound),
+			_ => {
+				mismatch_spec(db, file!(), line!());
+				Err(LayerError::Fatal)
+			}
+		},
+		Err(()) => Err(LayerError::Fatal),
+	}
+}
+pub fn daily_reset(db: &mut LayerData, trans_mem: &mut Vec<u8>, reset_timestamp_unix: i64) {
+	db.pipe.zremrangebyrank(key::DAILY_CHEESE_RANKING, 0, -1).ignore();
+	db.pipe.set(key::DAILY_RESET_TIMESTAMP_UNIX, reset_timestamp_unix).ignore();
 }
 
 pub fn flush(db: &mut LayerData, trans_mem: &mut Vec<u8>) -> Result<(), ()> {

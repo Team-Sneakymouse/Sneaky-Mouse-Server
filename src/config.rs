@@ -20,6 +20,7 @@ pub struct SneakyMouseServer<'a> {
     pub db: LayerData<'a>,
 	pub rng: Pcg64,
 	pub cur_time: f64,
+    pub last_reset_otherwise_server_genisis_unix: i64,
 
 	pub cheese_timeouts: Vec<f64>,
 	pub cheese_uids: Vec<u64>,
@@ -64,16 +65,19 @@ pub struct CheeseData<'a> {
 pub const ASCII_NEG: u8 = 45;
 pub const ASCII_0: u8 = 48;
 pub const ASCII_9: u8 = ASCII_0 + 9;
+pub const ASCII_NEWLINE: u8 = 10;
 pub const STR_NULL: &str = "null";
+
+pub const SM_RESET_EPOCH_UNIX: i64 = 1640516400;
+pub const SECS_IN_DAY_UNIX: i64 = 60*60*24;
 
 pub const CHEESE_RADICAL_MULT: f32 = 1.1;
 pub const CHEESE_TTL: f64 = 5.0*60.0*60.0;
 
 pub mod event {
     pub mod input {
-        pub const DEBUG_CONSOLE: &[u8] = b"debug:console";
-        // pub const SHUTDOWN: &[u8] = b"sm:shutdown";
-        pub const CHEESE_GIVE: &[u8] = b"sm-cheese:give";
+        pub const DEBUG_CONSOLE:  &[u8] = b"debug:console";
+        pub const CHEESE_GIVE:    &[u8] = b"sm-cheese:give";
         pub const CHEESE_SPAWN  : &[u8] = b"sm-cheese:spawn";
         pub const CHEESE_REQUEST: &[u8] = b"sm-cheese:request";
         pub const CHEESE_COLLECT: &[u8] = b"sm-cheese:collect";
@@ -86,15 +90,12 @@ pub mod event {
         pub const CHEESE_QUEUE  : &[u8] = b"sm-cheese:queue";
     }
     pub mod field {
-        // pub const TRIGGER: &str = "trigger";
         pub const MESSAGE: &str = "message";
         pub const MOUSE_BODY: &str = "body";
         pub const MOUSE_HAT: &str = "hat";
         pub const USER_ID: &str = "user-id";
         pub const ROOM_ID: &str = "room-id";
         pub const USER_NAME: &str = "user-name";
-        // pub const CHEESE_TOTAL: &str = "cheese";
-        // pub const GEM_TOTAL: &str = "gems";
         pub const CHEESE_DELTA: &str = "cheese-delta";
         pub const GEM_DELTA: &str = "gems-delta";
         pub const CHEESE_COST: &str = "cheese-cost";
@@ -148,6 +149,11 @@ pub mod layer {
         pub const MAXUUID: &str = "user-uuid-max";
         pub const CHEESE_UID_MAX: &str = "cheese-uid-max";
 
+        pub const GLOBAL_CHEESE_RANKING: &str = "global-cheese-ranking";
+        pub const DAILY_RESET_TIMESTAMP_UNIX: &str = "daily-reset-unix";
+        pub const GLOBAL_GEMS_RANKING: &str = "global-gems-ranking";
+        pub const DAILY_CHEESE_RANKING: &str = "daily-cheese-ranking";
+
         pub mod prefix {
             pub const CHEESE_DATA: &str = "cheese-temp:";
             pub const USER: &str = "user:";
@@ -175,6 +181,7 @@ pub mod layer {
 }
 pub mod http {
     pub const CONNECTION_TIMEOUT: f64 = 1.0;
+    pub const REQUEST_SIZE_MAX: usize = 5555;
     pub mod status {
         pub const OK: &str ="200 OK";
         pub const NOT_FOUND: &str ="404 Not Found";
