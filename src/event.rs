@@ -1,319 +1,355 @@
 //By Mami
-use rand_pcg::*;
 use crate::config::*;
-use crate::util;
-use rand::{Rng, RngCore, SeedableRng};
+use crate::config::event::*;
+use crate::util::*;
+use crate::db;
+use crate::com;
+use rand_pcg::*;
+use rand::{Rng};
+use chrono::{Utc};
+
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 
-pub struct SneakyMouseServer<'a> {
-	pub redis_con : redis::Connection,
-	pub redis_address : &'a str,
-	pub rng : Pcg64,
-	pub cur_time : f64,
-	pub next_timeout : f64,
-	pub cheese_timeouts : Vec<f64>,
-	pub cheese_uids : Vec<u64>,
-	pub cheese_rooms : Vec<Vec<u8>>,//I don't like this
-	pub cheese_ids : Vec<&'static [u8]>,
-	// pub xadd_trans_mem : Vec<(&'a[u8], &'a[u8])>,
+pub fn get_event_list() -> [&'static [u8]; 6] {
+	let mut v = [//this list is considered unordered
+		event::input::CHEESE_GIVE,
+
+		event::input::CHEESE_SPAWN,
+		event::input::CHEESE_REQUEST,
+		event::input::CHEESE_COLLECT,
+		event::input::CHEESE_DESPAWN,
+
+		event::input::DEBUG_CONSOLE,
+		// event::input::SHUTDOWN,
+	];
+	v.sort_unstable();
+	return v;
 }
 
-pub fn get_event_list() -> Vec<&'static [u8]> {
-	//Normally I wouldn't have a function return an allocation, but this is only called once by main to configure itself
-	vec![//this list is considered unordered
-		EVENT_SHUTDOWN,
-		EVENT_DEBUG_CONSOLE,
-		EVENT_CHEESE_REQUEST,
-		EVENT_CHEESE_SPAWN,
-		EVENT_CHEESE_COLLECTED,
-	]
-}
-
-pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]], trans_mem : &mut Vec<u8>) -> Option<bool> {
-	trans_mem.clear();
+pub fn server_event_received(server_state: &mut SneakyMouseServer, event_name: &[u8], event_uid: &[u8], keys: &[&[u8]], vals: &[&[u8]], trans_mem: &mut Vec<u8>) -> Result<(), ()> {
 	match event_name {
-		EVENT_DEBUG_CONSOLE => {
+		event::input::CHEESE_GIVE => {//Non-atomic
+			if let Some(dest_id) = find_field_u8s(field::DEST_ID, keys, vals) {
+
+
+			let (dest_uuid, dest_user) = match db::get_user_from_id(&mut server_state.db, trans_mem, dest_id) {
+				Ok(v) => v,
+				Err(LayerError::NotFound) => {
+					missing_user(server_state, event_name, event_uid, keys, vals, field::DEST_ID);
+					return Ok(());
+				},
+				Err(LayerError::Fatal) => return Err(()),
+			};
+
+
+			let mut cheese_delta = find_field_i32(field::CHEESE_DELTA, server_state, event_name, event_uid, keys, vals).unwrap_or(0).clamp(-i32::MAX/2, i32::MAX/2);
+			let gem_delta = find_field_i32(field::GEM_DELTA, server_state, event_name, event_uid, keys, vals).unwrap_or(0).clamp(-i32::MAX/2, i32::MAX/2);
+
+			let strat = match find_field_u8s(field::DEST_ID, keys, vals).unwrap_or(val::CHEESE_STRAT_CANCEL) {
+				val::CHEESE_STRAT_CANCEL => 0,
+				val::CHEESE_STRAT_OVERFLOW => 1,
+				val::CHEESE_STRAT_SATURATE => 2,
+				_ => {
+					invalid_value(server_state, event_name, event_uid, keys, vals, field::DEST_ID);
+					0
+				}
+			};
+
+			let mut do_transaction = true;
+			if strat == 0 {
+				do_transaction = check_user_has_enough_currency(&dest_user, Currency::CHEESE, cheese_delta);
+			} else if strat == 2 {
+				let (d, _) = check_user_saturating_currency(&dest_user, Currency::CHEESE, cheese_delta, 0);
+				cheese_delta = d;
+			}
+
+			if do_transaction && check_user_has_enough_currency(&dest_user, Currency::GEMS, gem_delta) {
+				if let Some(src_id) = find_field_u8s(field::SRC_ID, keys, vals) {
+
+					let (src_uuid, src_user) = match db::get_user_from_id(&mut server_state.db, trans_mem, src_id) {
+						Ok(v) => v,
+						Err(LayerError::NotFound) => {
+							missing_user(server_state, event_name, event_uid, keys, vals, field::DEST_ID);
+							return Ok(());
+						},
+						Err(LayerError::Fatal) => return Err(()),
+					};
+
+					let cheese_cost_src = find_field_i32(field::CHEESE_COST, server_state, event_name, event_uid, keys, vals).unwrap_or(0).clamp(-i32::MAX/2, i32::MAX/2);
+					let gem_cost_src = find_field_i32(field::GEM_COST, server_state, event_name, event_uid, keys, vals).unwrap_or(0).clamp(-i32::MAX/2, i32::MAX/2);
+
+					let mut do_transaction = true;
+					if strat == 0 {
+						do_transaction = check_user_has_enough_currency(&src_user, Currency::CHEESE, -cheese_delta - cheese_cost_src);
+					} else if strat == 2 {
+						let (d, is) = check_user_saturating_currency(&src_user, Currency::CHEESE, -cheese_delta, -cheese_cost_src);
+						do_transaction = is;
+						cheese_delta = -d;
+					}
+
+					if do_transaction && check_user_has_enough_currency(&src_user, Currency::GEMS, -gem_delta - gem_cost_src) {
+
+
+						db::incr_user_currency(&mut server_state.db, trans_mem, src_uuid, &src_user, Currency::CHEESE, -cheese_delta - cheese_cost_src);
+						db::incr_user_currency(&mut server_state.db, trans_mem, src_uuid, &src_user, Currency::GEMS, -gem_delta - gem_cost_src);
+
+						db::incr_user_currency(&mut server_state.db, trans_mem, dest_uuid, &dest_user, Currency::CHEESE, cheese_delta);
+						db::incr_user_currency(&mut server_state.db, trans_mem, dest_uuid, &dest_user, Currency::GEMS, gem_delta);
+
+						com::cheese_award(&mut server_state.db, trans_mem, dest_id, Some(src_id), cheese_delta, gem_delta)?;
+					}
+				} else {
+					db::incr_user_currency(&mut server_state.db, trans_mem, dest_uuid, &dest_user, Currency::CHEESE, cheese_delta);
+					db::incr_user_currency(&mut server_state.db, trans_mem, dest_uuid, &dest_user, Currency::GEMS, gem_delta);
+
+					com::cheese_award(&mut server_state.db, trans_mem, dest_id, None, cheese_delta, gem_delta)?;
+				}
+			}
+
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, field::DEST_ID)}
+		},
+		event::input::CHEESE_SPAWN => {
+			if let Some(room) = find_field_u8s(field::ROOM_ID, keys, vals) {
+			let mut cheese_uid: Option<u64> = None;
+
+
+			let mut cheese;
+			let cheese_id_hash: u64;
+			if let Some(cheese_id) = find_field_u8s(field::CHEESE_ID, keys, vals) {
+				let mut hasher = DefaultHasher::new();//I swear to god if this allocates
+				Hash::hash_slice(cheese_id, &mut hasher);
+				cheese_id_hash = hasher.finish();
+
+				for (i, cur_cheese_id) in server_state.cheese_ids.iter().enumerate() {
+					if *cur_cheese_id == cheese_id_hash && server_state.cheese_rooms[i] == room {
+						cheese_uid = Some(server_state.cheese_uids[i]);
+						break;
+					}
+				}
+
+				if let Some(uid) = cheese_uid {
+					cheese = db::get_cheese_from_uuid(&mut server_state.db, trans_mem, uid)?;
+				} else if cheese_id_hash == 0 {
+					cheese = generate_default_cheese();
+				} else {
+					cheese = db::get_cheese_from_id(&mut server_state.db, trans_mem, cheese_id)?;
+				}
+			} else {
+				cheese = generate_default_cheese();
+				cheese_id_hash = 0;
+			}
+
+			if let Some(time_min) = find_field_u32(field::TIME_MIN, server_state, event_name, event_uid, keys, vals) {
+				if let Some(time_max) = find_field_u32(field::TIME_MAX, server_state, event_name, event_uid, keys, vals) {
+					cheese.time_min = time_min;
+					cheese.time_max = time_max;
+					if time_min > time_max {
+						invalid_value(server_state, event_name, event_uid, keys, vals, field::TIME_MIN);
+						cheese.time_min = time_max;
+					}
+				} else {
+					cheese.time_min = time_min;
+					cheese.time_max = time_min;
+				}
+			} else if let Some(time_max) = find_field_u32(field::TIME_MAX, server_state, event_name, event_uid, keys, vals) {
+				cheese.time_min = time_max;
+				cheese.time_max = time_max;
+			}
+
+			cheese.size = find_field_i32(field::SIZE, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.size).clamp(-CHEESE_SIZE_MAX, CHEESE_SIZE_MAX);
+			if cheese.original_size == 0 {
+				cheese.original_size = cheese.size;
+			}
+			cheese.gems = find_field_i32(field::GEMS, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.gems).clamp(-CHEESE_GEMS_MAX, CHEESE_GEMS_MAX);
+			cheese.silent = find_field_bool(field::SILENT, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.silent);
+			cheese.exclusive = find_field_bool(field::EXCLUSIVE, server_state, event_name, event_uid, keys, vals).unwrap_or(cheese.exclusive);
+
+			cheese.image = find_field_u8s(field::IMAGE, keys, vals).unwrap_or(cheese.image);
+			if let Some(s) = find_field_u8s(field::RADICAL_IMAGE, keys, vals) {
+				cheese.radical_image = Some(s);
+			}
+
+			if let Some(m) = find_field_f32(field::SIZE_MULT, server_state, event_name, event_uid, keys, vals) {
+				cheese.size = ((cheese.size as f32)*m) as i32;
+			}
+			if let Some(incr) = find_field_i32(field::SIZE_INCR, server_state, event_name, event_uid, keys, vals) {
+				cheese.size = i32::saturating_add(cheese.size, incr);
+			}
+			cheese.size = cheese.size.clamp(-CHEESE_SIZE_MAX, CHEESE_SIZE_MAX);
+
+
+			if let Some(uid) = cheese_uid {
+				db::set_cheese(&mut server_state.db, trans_mem, uid, &cheese);
+
+			} else {
+				let uid = db::add_new_cheese(&mut server_state.db, trans_mem, &cheese)?;
+
+				let time_out_ms = server_state.rng.gen_range(cheese.time_min..=cheese.time_max);
+				let time_out = f64::min((time_out_ms as f64)/1000.0, CHEESE_TTL - 5.0);
+
+				server_state.cheese_timeouts.push(time_out);
+				server_state.cheese_uids.push(uid);
+				server_state.cheese_rooms.push(Vec::from(room));
+				server_state.cheese_ids.push(cheese_id_hash);
+			}
+
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, field::ROOM_ID)}
+		},
+		event::input::CHEESE_REQUEST => {
+			if let Some(user_id) = find_field_u8s(field::USER_ID, keys, vals) {
+			if let Some(user_screen_name) = find_field_u8s(field::USER_NAME, keys, vals) {
+			if let Some(room) = find_field_u8s(field::ROOM_ID, keys, vals) {
+
+
+			let (uuid, user) = db::get_or_create_user_from_id(&mut server_state.db, trans_mem, user_id, user_screen_name)?;
+			com::cheese_queue(&mut server_state.db, trans_mem, room, user_id, &user)?;
+
+
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, field::ROOM_ID)}
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, field::USER_NAME)}
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, field::USER_ID)}
+		},
+		event::input::CHEESE_COLLECT => {
+			if let Some(cheese_uuid) = find_field_u64(field::CHEESE_UUID, server_state, event_name, event_uid, keys, vals) {
+			if let Some(user_id) = find_field_u8s(field::USER_ID, keys, vals) {
+
+
+			let (uuid, user) = match db::get_user_from_id(&mut server_state.db, trans_mem, user_id) {
+				Ok(v) => v,
+				Err(LayerError::NotFound) => {
+					missing_user(server_state, event_name, event_uid, keys, vals, field::USER_ID);
+					return Ok(());
+				},
+				Err(LayerError::Fatal) => return Err(()),
+			};
+			let cheese = db::get_cheese_from_uuid(&mut server_state.db, trans_mem, cheese_uuid)?;
+
+			let incr;
+			if cheese.squirrel_mult != 0.0 {
+				incr = i32::saturating_add(((user.cheese as f64)*(cheese.squirrel_mult as f64)) as i32, cheese.size as i32);
+			} else {
+				incr = cheese.size;
+			}
+
+
+			db::incr_user_currency(&mut server_state.db, trans_mem, uuid, &user, Currency::CHEESE, incr);
+			db::incr_user_currency(&mut server_state.db, trans_mem, uuid, &user, Currency::GEMS, cheese.gems);
+
+
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, field::USER_ID)}
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, field::CHEESE_UUID)}
+		}
+		event::input::CHEESE_DESPAWN => {
+			if let Some(room) = find_field_u8s(field::ROOM_ID, keys, vals) {
+
+			for (i, cur_room) in server_state.cheese_rooms.iter().enumerate() {
+				if *cur_room == room {
+					server_state.cheese_timeouts.swap_remove(i);
+					server_state.cheese_uids.swap_remove(i);
+					server_state.cheese_rooms.swap_remove(i);
+					server_state.cheese_ids.swap_remove(i);
+
+					break;
+				}
+			}
+
+			com::cheese_despawn(&mut server_state.db, trans_mem, room)?;
+
+			} else {missing_field(server_state, event_name, event_uid, keys, vals, field::ROOM_ID)}
+		},
+		event::input::DEBUG_CONSOLE => {
 			print!("debug event: {} <", String::from_utf8_lossy(event_uid));
 			for (i, key) in keys.iter().enumerate() {
 				print!("{}:{}", String::from_utf8_lossy(key), String::from_utf8_lossy(vals[i]));
 				if i+1 == keys.len() {
-					print!("> {}\n", server_state.redis_address);
+					print!("> {}\n", server_state.db.redis_address);
 				} else {
 					print!(", ");
 				}
 			}
-		}
-		EVENT_CHEESE_REQUEST => {
-			if let Some(useruid_raw) = util::find_val(FIELD_USER_UID, keys, vals) {
-			if let Some(username) = util::find_val(FIELD_USER_NAME, keys, vals) {
-			if let Some(room) = util::find_val(FIELD_ROOM_UID, keys, vals) {
-
-				let uuid = util::lookup_user_uuid(server_state, useruid_raw)?;
-
-				let mut cmd = redis::cmd("HGET");
-				trans_mem.extend(KEY_USER_PREFIX.as_bytes());
-				util::push_u64(trans_mem, uuid);
-				cmd.arg(&trans_mem[..]).arg(KEY_MOUSE_BODY).arg(KEY_MOUSE_HAT);
-
-				if let redis::Value::Bulk(values) = util::auto_retry_cmd(server_state, &mut cmd)? {
-					let mut cmdxadd = redis::cmd("XADD");
-					cmdxadd.arg(EVENT_CHEESE_COLLECT).arg("*");
-					cmdxadd.arg(FIELD_ROOM_UID).arg(room);
-					cmdxadd.arg(FIELD_USER_UID).arg(useruid_raw);
-					cmdxadd.arg(FIELD_USER_NAME).arg(username);
-
-					match &values[0] {
-						redis::Value::Data(body) => {
-							cmdxadd.arg(FIELD_MOUSE_BODY).arg(body);
-						}
-						redis::Value::Nil => {//set the default body
-							cmdxadd.arg(FIELD_MOUSE_BODY).arg(VAL_MOUSE_BODY_DEFAULT);
-							let mut cmdset = redis::Cmd::hset(&trans_mem[..], KEY_MOUSE_BODY, VAL_MOUSE_BODY_DEFAULT);
-							let _ : redis::Value = util::auto_retry_cmd(server_state, &mut cmdset)?;
-						}
-						_ => util::mismatch_spec(server_state, file!(), line!())
-					}
-					match &values[1] {
-						redis::Value::Data(hat) => {
-							cmdxadd.arg(FIELD_MOUSE_HAT).arg(hat);
-						}
-						redis::Value::Nil => (),
-						_ => util::mismatch_spec(server_state, file!(), line!())
-					}
-					let _ : redis::Value = util::auto_retry_cmd(server_state, &mut cmdxadd)?;
-				} else {
-					util::mismatch_spec(server_state, file!(), line!());
-				}
-			} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_ROOM_UID);}
-			} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_USER_NAME);}
-			} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_USER_UID);}
-		}
-		EVENT_CHEESE_SPAWN => {
-			if let Some(room) = util::find_val(FIELD_ROOM_UID, keys, vals) {
-			if let Some(cheese_id_raw) = util::find_val(FIELD_CHEESE_ID, keys, vals) {
-
-			let cheese_id : &'static [u8] = match cheese_id_raw {
-				_ => CHEESE_DEFAULT,
-			};
-
-			let mut cheese_uid = u64::MAX;
-			let mut cheese_i = 0;
-			for (i, server_room) in server_state.cheese_rooms.iter().enumerate() {
-				if server_room == room {
-					if server_state.cheese_ids[i] == cheese_id {
-						cheese_uid = server_state.cheese_uids[i];
-						cheese_i = i;
-					}
-					break;
-				}
-			}
-			let time_max = util::find_u64_field(FIELD_TIME_MAX, server_state, event_name, event_uid, keys, vals).unwrap_or(u64::MAX);
-			let time_min = util::find_u64_field(FIELD_TIME_MIN, server_state, event_name, event_uid, keys, vals).unwrap_or(u64::MAX);
-
-			if cheese_uid == u64::MAX {//set cheese to room
-				let size = util::find_u64_field(FIELD_SIZE, server_state, event_name, event_uid, keys, vals).unwrap_or(1);
-				let mut exclusive : bool = false;
-
-				if let Some(raw) = util::find_val(FIELD_EXCLUSIVE, keys, vals) {
-					if let Some(i) = util::to_bool(raw) {
-						exclusive = i;
-					} else {util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_EXCLUSIVE);}
-				}
-
-				let mut time_out;
-				if time_min == u64::MAX || time_max == time_min {
-					time_out = time_max;
-				} else if time_max == u64::MAX  {
-					time_out = time_min;
-				} else if time_max < time_min {
-					util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_TIME_MIN);
-					time_out = time_max;
-				} else {
-					time_out = server_state.rng.gen_range(time_min..=time_max);
-				}
-				time_out = u64::min(time_out, (VAL_CHEESE_MAX_TTL_S*1000) as u64);
-
-				let (image, silent) = util::get_cheese_data(server_state, cheese_id, trans_mem)?;
-
-				let mut cmdgetuid = redis::Cmd::incr(KEY_CHEESE_UID_MAX, 1i32);
-				let val = &util::auto_retry_cmd(server_state, &mut cmdgetuid)?;
-				cheese_uid = util::get_u64_from_val_or_panic(server_state, val);
-
-				let mut cmdhset = redis::cmd("HMSET");
-				trans_mem.extend(KEY_CHEESE_PREFIX.as_bytes());
-				util::push_u64(trans_mem, cheese_uid);
-				cmdhset.arg(&trans_mem[..]);
-
-				let mut cmdex = redis::Cmd::expire(&trans_mem[..], VAL_CHEESE_MAX_TTL_S);
-				trans_mem.clear();
-
-				let mut cmdxadd = redis::cmd("XADD");
-				cmdxadd.arg(EVENT_CHEESE_UPDATE).arg("*");
-				cmdxadd.arg(FIELD_CHEESE_UID).arg(cheese_uid);
-
-				cmdhset.arg(FIELD_ROOM_UID).arg(room);
-				cmdxadd.arg(FIELD_ROOM_UID).arg(room);
-
-				cmdxadd.arg(FIELD_IMAGE).arg(image);
-				if size > 1 {
-					cmdhset.arg(FIELD_SIZE).arg(size);
-					cmdxadd.arg(FIELD_SIZE).arg(size);
-				}
-				if silent {
-					cmdhset.arg(FIELD_SILENT).arg(silent);
-					cmdxadd.arg(FIELD_SILENT).arg(silent);
-				}
-				if exclusive {
-					cmdhset.arg(FIELD_EXCLUSIVE).arg(exclusive);
-					cmdxadd.arg(FIELD_EXCLUSIVE).arg(exclusive);
-				}
-
-				server_state.cheese_timeouts.push((time_out as f64)/1000.0);
-				server_state.cheese_uids.push(cheese_uid);
-				server_state.cheese_rooms.push(Vec::from(room));
-				server_state.cheese_ids.push(&cheese_id);
-
-				util::auto_retry_cmd(server_state, &mut cmdhset)?;
-				util::auto_retry_cmd(server_state, &mut cmdex)?;
-				util::auto_retry_cmd(server_state, &mut cmdxadd)?;
-			} else {//augment current cheese
-				let size = util::find_u64_field(FIELD_SIZE, server_state, event_name, event_uid, keys, vals);
-				let mut exclusive : Option<bool> = None;
-
-				if let Some(raw) = util::find_val(FIELD_EXCLUSIVE, keys, vals) {
-					if let Some(i) = util::to_bool(raw) {
-						exclusive = Some(i);
-					} else {util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_EXCLUSIVE);}
-				}
-
-				let (image, silent) = util::get_cheese_data(server_state, cheese_id, trans_mem)?;
-
-				let mut cmdxadd = redis::cmd("XADD");
-				cmdxadd.arg(EVENT_CHEESE_UPDATE).arg("*");
-				cmdxadd.arg(FIELD_CHEESE_UID).arg(cheese_uid);
-
-				let mut cmdhget = redis::cmd("HMGET");
-				let mut cmdhset = redis::cmd("HMSET");
-				trans_mem.extend(KEY_CHEESE_PREFIX.as_bytes());
-				util::push_u64(trans_mem, cheese_uid);
-				cmdhget.arg(&trans_mem[..]);
-				cmdhset.arg(&trans_mem[..]);
-				trans_mem.clear();
-				let flag = false;
-				cmdhget.arg(FIELD_SIZE);
-				cmdhget.arg(FIELD_SILENT);
-				if let None = exclusive {
-					cmdhget.arg(FIELD_EXCLUSIVE);
-				}
-
-				match util::auto_retry_cmd(server_state, &mut cmdhget)? {
-					redis::Value::Bulk(values) => {
-						if values.len() != 3 {util::mismatch_spec(server_state, file!(), line!());}
-
-						if let Some(v) = size {
-							let new_size = v;
-							if let redis::Value::Data(size_raw) = values[0] {
-								if let Some(pre_size) = util::to_u64(&size_raw) {
-									new_size += pre_size;
-								} else {util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_SIZE);}
-							}
-							cmdxadd.arg(FIELD_SIZE).arg(new_size);
-							cmdhset.arg(FIELD_SIZE).arg(new_size);
-							flag = true;
-						} else {
-							if let redis::Value::Data(size_raw) = values[0] {
-								cmdxadd.arg(FIELD_SIZE).arg(size_raw);
-							}
-						}
-						if let redis::Value::Data(exclusive_raw) = values[1] {
-							cmdxadd.arg(FIELD_EXCLUSIVE).arg(exclusive_raw);
-						}
-						if let Some(v) = exclusive {
-							cmdxadd.arg(FIELD_EXCLUSIVE).arg(v);
-							cmdhset.arg(FIELD_SIZE).arg(v);
-							flag = true;
-						} else {
-							if let redis::Value::Data(silent_raw) = values[2] {
-								cmdxadd.arg(FIELD_SILENT).arg(silent_raw);
-							} else if silent {
-								cmdxadd.arg(FIELD_SILENT).arg(silent);
-							}
-						}
-					}
-					_ => {util::mismatch_spec(server_state, file!(), line!());}
-				}
-
-				let mut time_out;
-				if time_min == u64::MAX || time_max == time_min {
-					time_out = time_max;
-				} else if time_max == u64::MAX  {
-					time_out = time_min;
-				} else if time_max < time_min {
-					util::invalid_value(server_state, event_name, event_uid, keys, vals, FIELD_TIME_MIN);
-					time_out = time_max;
-				} else {
-					time_out = server_state.rng.gen_range(time_min..=time_max);
-				}
-				if time_out != u64::MAX {
-					time_out = u64::min(time_out, (VAL_CHEESE_MAX_TTL_S*1000) as u64);
-					server_state.cheese_timeouts[cheese_i] = server_state.cur_time + (time_out as f64)/1000.0;
-				}
-
-				if flag {
-					util::auto_retry_cmd(server_state, &mut cmdhset)?;
-				}
-				util::auto_retry_cmd(server_state, &mut cmdxadd)?;
-
-				}
-				} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_CHEESE_ID);}
-			} else {util::missing_field(server_state, event_name, event_uid, keys, vals, FIELD_ROOM_UID);}
-		}
-		EVENT_CHEESE_COLLECTED => {
-
-		}
-		EVENT_SHUTDOWN => {
-			print!("shutdown request acknowledged, closing the server\n");
-
-			for room in server_state.cheese_rooms {
-
-				let mut cmdxadd = redis::cmd("XADD");
-				cmdxadd.arg(EVENT_CHEESE_UPDATE).arg("*");
-				cmdxadd.arg(FIELD_ROOM_UID).arg(room);
-
-				util::auto_retry_cmd(server_state, &mut cmdxadd)?;
-			}
-			return None
-		}
+		},
 		_ => {
 			panic!("fatal error: we received an unrecognized event from redis, '{}', please check the events list\n", String::from_utf8_lossy(event_name));
 		}
 	}
-	Some(true)
+	Ok(())
 }
 
 
-pub fn server_update(server_state : &mut SneakyMouseServer, trans_mem : &mut Vec<u8>, delta : f64) -> Option<f64> {
+pub fn server_update(server_state: &mut SneakyMouseServer, trans_mem: &mut Vec<u8>, delta: f64) -> Result<f64, ()> {
 	server_state.cur_time += delta;
 
-	let i = 0;
-	let next_timeout = REDIS_STREAM_TIMEOUT_MAX;
+	//check unix timestamp and do reset if enough time has passed
+	let now_unix: i64 = Utc::now().timestamp();
+	let last_reset_unix: i64 = server_state.last_reset_otherwise_server_genisis_unix;
+	/*
+	We want to add a day to the last_reset time and round it down so that it equals SM_RESET_EPOCH%SECS_IN_DAY + c*SECS_IN_DAY for some int c.
+	Given last_reset, SM_RESET_EPOCH, there exists c such that
+		SM_RESET_EPOCH%SECS_IN_DAY + (c - 1)*SECS_IN_DAY last_reset <= last_reset < SM_RESET_EPOCH%SECS_IN_DAY + c*SECS_IN_DAY.
+	We want to figure out the value of SM_RESET_EPOCH%SECS_IN_DAY + c*SECS_IN_DAY, so we want to find c.
+	So (c - 1)*SECS_IN_DAY <= last_reset - SM_RESET_EPOCH%SECS_IN_DAY
+		==> c - 1 <= (last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY
+		==> c <= (last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY + 1.
+	and last_reset < SM_RESET_EPOCH%SECS_IN_DAY + c*SECS_IN_DAY
+		==> last_reset - SM_RESET_EPOCH%SECS_IN_DAY < c*SECS_IN_DAY
+		==> (last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY < c.
+	Thus (last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY < c <= (last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY + 1.
+	Given a, a < floor(a + 1) <= a + 1.
+	Thus only int c that can satisfy the above property is 'floor((last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY + 1)'.
+	So c = floor((last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY + 1)
+			= floor((last_reset - SM_RESET_EPOCH%SECS_IN_DAY)/SECS_IN_DAY) + 1
+			= (last_reset - SM_RESET_EPOCH%SECS_IN_DAY) '/' SECS_IN_DAY + 1 (where '/' is integer division)
+	*/
+	let c: i64 = (last_reset_unix - SM_RESET_EPOCH_UNIX%SECS_IN_DAY_UNIX)/SECS_IN_DAY_UNIX + 1;
+	let next_reset_unix: i64 = SM_RESET_EPOCH_UNIX%SECS_IN_DAY_UNIX + c*SECS_IN_DAY_UNIX;
+
+	if next_reset_unix <= now_unix {
+		//time going backwards as it does in unix time (leap seconds) will not affect this code since it always takes the first greater and setting that to the last reset time
+		server_state.last_reset_otherwise_server_genisis_unix = now_unix;
+		//do reset
+		db::daily_reset(&mut server_state.db, trans_mem, now_unix);
+	}
+
+
+		//check for cheese timeouts
+	let mut i = 0;
+	let mut next_timeout = event::TIMEOUT_MAX;
 	while i < server_state.cheese_timeouts.len() {
 		if server_state.cheese_timeouts[i] <= server_state.cur_time {
 			server_state.cheese_timeouts.swap_remove(i);
-			let cheese_uid = server_state.cheese_uids.swap_remove(i);
+			let cheese_uuid = server_state.cheese_uids.swap_remove(i);
 			let room = server_state.cheese_rooms.swap_remove(i);
 			server_state.cheese_ids.swap_remove(i);
 
-			let mut cmdxadd = redis::cmd("XADD");
-			cmdxadd.arg(EVENT_CHEESE_UPDATE).arg("*");
-			cmdxadd.arg(FIELD_ROOM_UID).arg(room);
+			let mut cheese = db::get_cheese_from_uuid(&mut server_state.db, trans_mem, cheese_uuid)?;
 
-			util::auto_retry_cmd(server_state, &mut cmdxadd)?;
+			if let Some(radical) = cheese.radical_image {
+				cheese.image = radical;
+				cheese.exclusive = true;
+				cheese.size = (CHEESE_RADICAL_MULT*cheese.size as f32) as i32;
+				cheese.squirrel_mult *= CHEESE_RADICAL_MULT;
+
+				db::set_cheese(&mut server_state.db, trans_mem, cheese_uuid, &cheese);
+				com::cheese_update(&mut server_state.db, trans_mem, &room, cheese_uuid, &cheese)?;
+			} else {
+				com::cheese_despawn(&mut server_state.db, trans_mem, &room)?;
+			}
+
+
 		} else {
+			i += 1;
 			next_timeout = f64::min(next_timeout, server_state.cheese_timeouts[i] - server_state.cur_time);
 		}
-		i += 1;
 	}
 
-	Some(next_timeout)
+	Ok(next_timeout)
+}
+
+pub fn server_shutdown(server_state: &mut SneakyMouseServer, trans_mem: &mut Vec<u8>) -> Result<(),()> {
+	for i in 0..server_state.cheese_rooms.len() {
+		com::cheese_despawn(&mut server_state.db, trans_mem, &server_state.cheese_rooms[i])?;
+	}
+	return db::flush(&mut server_state.db, trans_mem);
 }

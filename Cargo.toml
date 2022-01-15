@@ -3,29 +3,12 @@ name = "sneaky-mouse-server"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-# [lib]
-# name = "lib"
-# path = "src/lib.rs"
-
-# [[bin]]
-# name = "rest-api"
-# path = "src/bin.rs"
 
 [dependencies]
-rand_pcg = "0.3.1"
-rand = "0.8.4"
-getrandom = "0.2"
-# rocket = "0.4"
-# serde = { version = "1.0", features = ["derive"] }
-# serde_json = "1.0"
+rand_pcg = "*"
+rand = "*"
+chrono = "*"
 
 [dependencies.redis]
-version = "0.21.0"
+version = "*"
 features = ["streams"]
-
-# [dependencies.rocket_contrib]
-# version = "0.4"
-# default-features = false
-# features = ["json"]
-

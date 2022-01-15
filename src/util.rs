@@ -1,65 +1,110 @@
 //By Mami
 use crate::config::*;
+use crate::com;
 use crate::event;
-use event::SneakyMouseServer;
 use redis::FromRedisValue;
+use rand_pcg::*;
+use rand::{Rng, RngCore};
 
-pub fn push_u64(mem : &mut Vec<u8>, i : u64) {
+pub fn push_u64(mem: &mut Vec<u8>, i: u64) {
 	if i >= 10 {
 		push_u64(mem, i/10);
 	}
-	mem.push(((i%10) as u8) + 48);
+	mem.push(((i%10) as u8) + ASCII_0);
+}
+pub fn push_u64_prefix<'a>(stack: &mut Vec<u8>, prefix: &str, i: u64) -> &'a[u8] {
+	//The actual lifetime of the return value is the lifetime of the bytes in stack, which rust's borrow checker struggles to comprehend
+	let start = stack.len();
+	stack.extend_from_slice(prefix.as_bytes());
+	push_u64(stack, i);
+	let end = stack.len();
+	let ptr = stack.as_ptr();
+	return unsafe {
+		std::slice::from_raw_parts(ptr.add(start), end - start)
+	}
+}
+pub fn push_u8s<'a>(stack: &mut Vec<u8>, src: &[u8]) -> &'a[u8] {
+	//The actual lifetime of the return value is the lifetime of the bytes in stack, which rust's borrow checker struggles to comprehend
+	let start = stack.len();
+	stack.extend_from_slice(src);
+	let end = stack.len();
+	let ptr = stack.as_ptr();
+	return unsafe {
+		std::slice::from_raw_parts(ptr.add(start), end - start)
+	}
 }
 
-pub fn to_u64(mem : &[u8]) -> Option<u64> {//eats leading 0s
-	if mem.len() > 19 {return None;}
-	let mut i : u64 = 0;
+pub fn to_u32(mem: &[u8]) -> Option<u32> {//eats leading 0s
+	let mut i: u32 = 0;
 	for c in mem {
-		if *c >= 48u8 && *c <= 48 + 9 {
-			i += (*c - 48) as u64;
-			i *= 10;
+		if *c >= ASCII_0 && *c <= ASCII_9 {
+			i = i.saturating_mul(10);
+			i = i.saturating_add((*c - ASCII_0) as u32);
 		} else {
 			return None;
 		}
 	}
 	return Some(i);
 }
-pub fn to_bool(mem : &[u8]) -> Option<bool> {//eats leading 0s
+pub fn to_u64(mem: &[u8]) -> Option<u64> {//eats leading 0s
+	let mut i: u64 = 0;
+	for c in mem {
+		if *c >= ASCII_0 && *c <= ASCII_9 {
+			i = i.saturating_mul(10);
+			i = i.saturating_add((*c - ASCII_0) as u64);
+		} else {
+			return None;
+		}
+	}
+	return Some(i);
+}
+pub fn to_i32(mem: &[u8]) -> Option<i32> {//eats leading 0s
+	let mut i: i32 = 0;
+	let s = (mem[0] == ASCII_NEG) as usize;
+	for c in &mem[s..] {
+		if *c >= ASCII_0 && *c <= ASCII_9 {
+			i = i.saturating_mul(10);
+			i = i.saturating_add((*c - ASCII_0) as i32);
+		} else {
+			return None;
+		}
+	}
+	return Some((1 - (s as i32)*2)*i);
+}
+pub fn to_i64(mem: &[u8]) -> Option<i64> {//eats leading 0s
+	let mut i: i64 = 0;
+	let s = (mem[0] == ASCII_NEG) as usize;
+	for c in &mem[s..] {
+		if *c >= ASCII_0 && *c <= ASCII_9 {
+			i = i.saturating_mul(10);
+			i = i.saturating_add((*c - ASCII_0) as i64);
+		} else {
+			return None;
+		}
+	}
+	return Some((1 - (s as i64)*2)*i);
+}
+pub fn to_f32(mem: &[u8]) -> Option<f32> {
+	if let Ok(s) = std::str::from_utf8(mem) {
+		if let Ok(v) = s.parse::<f32>() {
+			return Some(v);
+		}
+	}
+	return None;
+}
+pub fn to_bool(mem: &[u8]) -> Option<bool> {
 	match mem {
-		b"true" => Some(true),
-		b"false" => Some(false),
+		b"true" | b"1" => Some(true),
+		b"false" | b"0" => Some(false),
 		_ => None,
 	}
 }
-
-pub fn get_u64_from_val_or_panic(server_state : &mut SneakyMouseServer, val : &redis::Value) -> u64 {
-	match FromRedisValue::from_redis_value(val) {
-		Ok(uuid) => uuid,
-		Err(_) => {
-			mismatch_spec(server_state, file!(), line!());
-			0//unreachable
-		}
-	}
-}
-pub fn lookup_user_uuid(server_state : &mut SneakyMouseServer, user_identifier : &[u8]) -> Option<u64> {
-	let mut cmd = redis::cmd("HGET");
-	cmd.arg(KEY_USERUUID_HM).arg(user_identifier);
-	match FromRedisValue::from_redis_value(&auto_retry_cmd(server_state, &mut cmd)?) {
-		Ok(uuid) => Some(uuid),
-		Err(_) => {//assuming that the user does not exist
-			let mut cmd = redis::Cmd::incr(KEY_MAXUUID, 1i32);
-			let val = &auto_retry_cmd(server_state, &mut cmd)?;
-			let uuid = get_u64_from_val_or_panic(server_state, val);
-			let mut cmd = redis::cmd("HSET");
-			cmd.arg(KEY_USERUUID_HM).arg(user_identifier).arg(uuid);
-			auto_retry_cmd(server_state, &mut cmd)?;
-			//TODO: set up user profile
-			Some(uuid)
-		}
-	}
+pub fn is_str_null(mem: &[u8]) -> bool {
+	return mem == b"" || mem == STR_NULL.as_bytes();
 }
 
-pub fn find_val<'a>(key : &str, keys : &[&[u8]], vals : &[&'a[u8]]) -> Option<&'a[u8]> {
+
+pub fn find_field_u8s<'a>(key: &str, keys: &[&[u8]], vals: &[&'a[u8]]) -> Option<&'a[u8]> {
 	for (i, cur_key) in keys.iter().enumerate() {
 		if &key.as_bytes() == cur_key {
 			return Some(vals[i]);
@@ -67,9 +112,32 @@ pub fn find_val<'a>(key : &str, keys : &[&[u8]], vals : &[&'a[u8]]) -> Option<&'
 	}
 	return None;
 }
-
-pub fn find_u64_field(key : &'static str, server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]]) -> Option<u64> {
-	match find_val(key, keys, vals) {
+pub fn find_field_bool(key: &'static str, server_state: &mut SneakyMouseServer, event_name: &[u8], event_uid: &[u8], keys: &[&[u8]], vals: &[&[u8]]) -> Option<bool> {
+	match find_field_u8s(key, keys, vals) {
+		Some(raw) => match to_bool(raw) {
+			Some(i) => Some(i),
+			None => {
+				invalid_value(server_state, event_name, event_uid, keys, vals, key);
+				None
+			}
+		}
+		None => None
+	}
+}
+pub fn find_field_u32(key: &'static str, server_state: &mut SneakyMouseServer, event_name: &[u8], event_uid: &[u8], keys: &[&[u8]], vals: &[&[u8]]) -> Option<u32> {
+	match find_field_u8s(key, keys, vals) {
+		Some(raw) => match to_u32(raw) {
+			Some(i) => Some(i),
+			None => {
+				invalid_value(server_state, event_name, event_uid, keys, vals, key);
+				None
+			}
+		}
+		None => None
+	}
+}
+pub fn find_field_u64(key: &'static str, server_state: &mut SneakyMouseServer, event_name: &[u8], event_uid: &[u8], keys: &[&[u8]], vals: &[&[u8]]) -> Option<u64> {
+	match find_field_u8s(key, keys, vals) {
 		Some(raw) => match to_u64(raw) {
 			Some(i) => Some(i),
 			None => {
@@ -80,124 +148,71 @@ pub fn find_u64_field(key : &'static str, server_state : &mut SneakyMouseServer,
 		None => None
 	}
 }
-
-pub fn get_cheese_data(server_state : &mut SneakyMouseServer, cheese_id : &'static [u8], trans_mem : &mut Vec<u8>) -> Option<(Vec<u8>, bool)> {
-	trans_mem.extend(KEY_CHEESE_DATA_PREFIX.as_bytes());
-	trans_mem.extend(cheese_id);
-	let mut cmdgetdata = redis::cmd("HMGET");
-	cmdgetdata.arg(&trans_mem[..]);
-	cmdgetdata.arg(KEY_CHEESE_IMAGE).arg(KEY_CHEESE_SILENT);
-	trans_mem.clear();
-	if let redis::Value::Bulk(vals) = auto_retry_cmd(server_state, &mut cmdgetdata)? {
-		let image = match vals[0] {
-			redis::Value::Data(image_raw) => image_raw,
-			redis::Value::Nil => Vec::from(VAL_CHEESE_DEFAULT_IMAGE),
-			_ => {
-				mismatch_spec(server_state, file!(), line!());
-				return None;
+pub fn find_field_i32(key: &'static str, server_state: &mut SneakyMouseServer, event_name: &[u8], event_uid: &[u8], keys: &[&[u8]], vals: &[&[u8]]) -> Option<i32> {
+	match find_field_u8s(key, keys, vals) {
+		Some(raw) => match to_i32(raw) {
+			Some(i) => Some(i),
+			None => {
+				invalid_value(server_state, event_name, event_uid, keys, vals, key);
+				None
 			}
+		}
+		None => None
+	}
+}
+pub fn find_field_f32(key: &'static str, server_state: &mut SneakyMouseServer, event_name: &[u8], event_uid: &[u8], keys: &[&[u8]], vals: &[&[u8]]) -> Option<f32> {
+	match find_field_u8s(key, keys, vals) {
+		Some(raw) => match to_f32(raw) {
+			Some(i) => Some(i),
+			None => {
+				invalid_value(server_state, event_name, event_uid, keys, vals, key);
+				None
+			}
+		}
+		None => None
+	}
+}
+
+pub fn check_user_saturating_currency(user: &UserData, currency: Currency, sat_delta: i32, cancel_delta: i32) -> (i32, bool) {
+	//NOTE: sat_delta is the amount being added to the currency, return value is the largest sat_delta possible without setting the user's currency negative, or false if it is not possible to satisfy cancel_delta
+	if sat_delta + cancel_delta >= 0 {
+		return (sat_delta, true);
+	} else {
+		let total = match currency {
+			Currency::CHEESE => user.cheese,
+			Currency::GEMS => user.gems,
 		};
-		let silent = match vals[1] {
-			redis::Value::Data(silent_raw) => match to_bool(&silent_raw) {
-				Some(i) => i,
-				None => {
-					invalid_db_entry(server_state, &trans_mem[..], KEY_CHEESE_IMAGE, &silent_raw);
-					return None;
-				}
-			}
-			redis::Value::Nil => false,
-			_ => {
-				mismatch_spec(server_state, file!(), line!());
-				return None;
-			}
-		};
-		return Some((image, silent));
-	} else {mismatch_spec(server_state, file!(), line!());}
-	return None;
-}
-
-// #[derive(Clone, Copy, Debug)]
-pub fn connect_to(redis_address : &str) -> Option<redis::Connection> {
-	for _ in 1..=REDIS_RETRY_CON_MAX_ATTEMPTS {
-		match redis::Client::open(redis_address) {
-			Ok(client) => match client.get_connection() {
-				Ok(con) => {
-					print!("successfully connected to server\n");
-					return Some(con);
-				}
-				Err(error) => {
-					print!("failed to connect to '{}': {}\n", redis_address, error);
-				}
-			}
-			Err(error) => panic!("could not parse redis url \'{}\': {}\n", redis_address, error)
-		}
-		std::thread::sleep(std::time::Duration::from_secs(REDIS_TIME_BETWEEN_RETRY_CON));
-	}
-
-	print!("connection attempts to exceeded {}, shutting down: contact an admin to restart the redis server\n", REDIS_RETRY_CON_MAX_ATTEMPTS);
-	return None;
-}
-
-// #[derive(Clone, Copy, Debug)]
-pub fn auto_retry_cmd<T : redis::FromRedisValue>(server_state : &mut event::SneakyMouseServer, cmd : &redis::Cmd) -> Option<T> {
-	//Only returns None if a connection cannot be established to the server, only course of action is to shut down until an admin intervenes
-	//NOTE: this can trigger a long thread::sleep() if reconnection fails
-	match cmd.query(&mut server_state.redis_con) {
-		Ok(data) => return Some(data),
-		Err(error) => match error.kind() {
-			redis::ErrorKind::InvalidClientConfig => {
-				panic!("fatal error: the redis command was invalid {}\n", error);
-			}
-			redis::ErrorKind::TypeError => {
-				panic!("fatal error: TypeError thrown by redis {}\n", error);
-			}
-			_ => {
-				print!("lost connection to the server: {}\n", error);
-				print!("attempting to reconnect\n");
-
-				let con = connect_to(&server_state.redis_address[..])?;
-				server_state.redis_con = con;
-				match cmd.query(&mut server_state.redis_con) {
-					Ok(data) => return Some(data),
-					Err(error) => {
-						print!("connection immediately failed on retry, shutting down: {}\n", error);
-						return None
-					}
-				}
-			}
+		let unconditional_total = total + (cancel_delta as i64);
+		if unconditional_total >= 0 {
+			let new_total = u64::saturating_sub(unconditional_total as u64, -sat_delta as u64) as i64;
+			let new_sat_delta = (new_total - unconditional_total) as i32;
+			// proof sketch of correctness:
+			// sat_delta == unconditional_total - (-sat_delta) - unconditional_total == new_total - unconditional_total;
+			// sat_delta <= unconditional_total -sat_sub- (-sat_delta) - unconditional_total == new_sat_delta;
+			// if sat_delta >= 0, sat_delta <= new_sat_delta <= unconditional_total + sat_delta - unconditional_total == sat_delta, which implies new_sat_delta == sat_delta
+			return (new_sat_delta, true);
+		} else {
+			return (0, false);
 		}
 	}
 }
-
-pub fn send_error(server_state : &mut SneakyMouseServer, error : &String) {
-	//Unlike all of our other functions, this one will only attempt to send the error to redis once and then move on if it fails
-	let mut cmd = redis::cmd("XADD");
-	cmd.arg(EVENT_DEBUG_ERROR).arg("*");
-	cmd.arg(FIELD_MESSAGE).arg(error);
-
-	match cmd.query::<redis::Value>(&mut server_state.redis_con) {
-		Ok(_) => (),
-		Err(error) => match error.kind() {
-			redis::ErrorKind::InvalidClientConfig => {
-				panic!("fatal error: the redis command was invalid {}\n", error);
-			}
-			redis::ErrorKind::TypeError => {
-				panic!("fatal error: TypeError thrown by redis {}\n", error);
-			}
-			_ => {
-				print!("lost connection to the server: {}\n", error);
-				print!("we will not attempt to reconnect\n");
-			}
-		}
-	}
+pub fn check_user_has_enough_currency(user: &UserData, currency: Currency, cancel_delta: i32) -> bool {
+	//NOTE: cancel_delta is the amount being added to the currency
+	let total = match currency {
+		Currency::CHEESE => user.cheese,
+		Currency::GEMS => user.gems,
+	};
+	return (cancel_delta >= 0) | (total + (cancel_delta as i64) >= 0);
 }
 
-pub fn push_kvs(error : &mut String, keys : &[&[u8]], vals : &[&[u8]]) {
+
+
+pub fn push_kvs(error: &mut String, keys: &[&[u8]], vals: &[&[u8]]) {
 	error.push_str("{{\n");
 	for (i, key) in keys.iter().enumerate() {
-		error.push_str(&String::from_utf8_lossy(key).into_owned());//TODO: remove this allocation
+		error.push_str(&*String::from_utf8_lossy(key));
 		error.push_str(":");
-		error.push_str(&String::from_utf8_lossy(vals[i]).into_owned());
+		error.push_str(&*String::from_utf8_lossy(vals[i]));
 		if i + 1 == keys.len() {
 			error.push_str("\n}}");
 		} else {
@@ -206,34 +221,44 @@ pub fn push_kvs(error : &mut String, keys : &[&[u8]], vals : &[&[u8]]) {
 	}
 }
 
-pub fn invalid_db_entry(server_state : &mut event::SneakyMouseServer, key : &[u8], field : &str, val : &[u8]) {
-	let mut error = format!("database error: key '{}:{}' had incorrect value {}, will attempt recovery with default values", String::from_utf8_lossy(key), field, String::from_utf8_lossy(val));
-
-	print!("{}\n", error);
-	send_error(server_state, &error);
-}
-
-pub fn invalid_value(server_state : &mut event::SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]], field : &'static str) {
-	let mut error = format!("invalid event error: field '{}' had an incorrect value, the event will still be executed with default values, name:{} id:{} contents:", field, String::from_utf8_lossy(event_name), String::from_utf8_lossy(event_uid));
+pub fn invalid_value(server_state: &mut SneakyMouseServer, event_name: &[u8], event_uid: &[u8], keys: &[&[u8]], vals: &[&[u8]], field: &'static str) {
+	let mut error = format!("invalid event error: field '{}' had an incorrect value, the event will still be attempted with default values, name:'{}' id:'{}' contents:", field, String::from_utf8_lossy(event_name), String::from_utf8_lossy(event_uid));
 	push_kvs(&mut error, keys, vals);
 
 	print!("{}\n", error);
-	send_error(server_state, &error);
+	com::send_error(&mut server_state.db, &error);
 }
-
-pub fn missing_field(server_state : &mut event::SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]], field : &'static str) {
-	let mut error = format!("invalid event error: missing critical field '{}', name:{} id:{} contents:", field, String::from_utf8_lossy(event_name), String::from_utf8_lossy(event_uid));
+pub fn missing_user(server_state: &mut SneakyMouseServer, event_name: &[u8], event_uid: &[u8], keys: &[&[u8]], vals: &[&[u8]], field: &'static str) {
+	let mut error = format!("invalid event error: field '{}' does not identify a known user, event is cancelled, name:'{}' id:'{}' contents:", field, String::from_utf8_lossy(event_name), String::from_utf8_lossy(event_uid));
 	push_kvs(&mut error, keys, vals);
 
 	print!("{}\n", error);
-	send_error(server_state, &error);
+	com::send_error(&mut server_state.db, &error);
+}
+pub fn missing_field(server_state: &mut SneakyMouseServer, event_name: &[u8], event_uid: &[u8], keys: &[&[u8]], vals: &[&[u8]], field: &'static str) {
+	let mut error = format!("invalid event error: missing critical field '{}', name:'{}' id:'{}' contents:", field, String::from_utf8_lossy(event_name), String::from_utf8_lossy(event_uid));
+	push_kvs(&mut error, keys, vals);
+
+	print!("{}\n", error);
+	com::send_error(&mut server_state.db, &error);
 }
 
 
-pub fn mismatch_spec(server_state : &mut SneakyMouseServer, file : &'static str, line : u32) {
-	let error = format!("fatal error {} line {}: redis response does not match expected specification, server will shutdown now", file, line);
+pub fn rand_f64(rng: &mut Pcg64) -> f64 {
+	return (rng.next_u64() as f64)/POW2TO64_F64;
+}
 
-	print!("{}\n", error);
-	send_error(server_state, &error);
-	panic!("shutting down due to fatal error\n");
+pub fn rand_d20(rng: &mut Pcg64) -> u32 {
+	return (rng.next_u64()%20) as u32 + 1;
+}
+
+pub fn rand_biased_d20(rng: &mut Pcg64) -> u32 {
+	return ((rng.next_u64()%22) as u32).clamp(1, 20);
+}
+
+pub fn rand_kobold_d20(rng: &mut Pcg64) -> u32 {
+	let r = rng.next_u64();
+	let r1 = (r%20) as u32 + 1;
+	let r2 = ((r/20)%20) as u32 + 1;
+	return if r1 == 1 || r2 == 1 {1} else {u32::max(r1, r2)};
 }

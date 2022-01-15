@@ -1,59 +1,275 @@
 //By Mami
+use rand_pcg::*;
+use std::net::TcpListener;
 
-pub const REDIS_STREAM_READ_COUNT : usize = 55;
-pub const REDIS_STREAM_TIMEOUT_MAX : f64 = 3.0;
-pub const REDIS_TIME_BETWEEN_RETRY_CON : u64 = 5;
-pub const REDIS_RETRY_CON_MAX_ATTEMPTS : i32 = 5;
+pub struct LayerData<'a> {
+	pub redis_con: redis::Connection,
+	pub redis_address: &'a str,
+    pub pipe: redis::Pipeline,
 
-pub const REDIS_LAST_ID_PREFIX : &str = "last_id";
-pub const REDIS_LAST_ID_DEFAULT : &str = "0-0";//either $ or 0-0 are acceptable here
+}
+pub struct HTTPServer<'a> {
+	pub disabled: bool,
+	pub addr: &'a str,
+	pub listener: Option<TcpListener>,
+}
+pub struct HTTPServerOutput {
+    pub shutdown: bool
+}
+pub struct Room {
+    pub id: Vec<u8>,
+    // pub dvz_state: u32,
+    // pub dvz_raid_sizes: [u32; dvz::class::TOTAL],
+    // pub dvz_defenders: Vec<u64>,
+    // pub dvz_defender_classes: Vec<u8>,
+    // pub dvz_defender_class_totals: [u32; dvz::class::TOTAL],
+    // pub dvz_money_donated: u64,
+    // pub dvz_events_total: u32,
+    // pub dvz_event_type: u32,
+    // pub dvz_event_death_roll: u32,
+    // pub dvz_event_defenders_needed: u32,
+    // pub dvz_event_defenders: Vec<u64>,
+    // pub dvz_event_defenders_attacks: Vec<u8>,
+}
 
-pub const KEY_USERUUID_HM : &str = "uuid";
-pub const KEY_MAXUUID : &str = "uuid-max";
-pub const KEY_CHEESE_UID_MAX : &str = "cheese-uid-max";
-pub const KEY_CHEESE_PREFIX : &str = "cheese:";
-pub const KEY_CHEESE_DATA_PREFIX : &str = "cheese-data:";
-pub const KEY_CHEESE_IMAGE : &str = "image";
-pub const KEY_CHEESE_SILENT : &str = "silent";
-pub const KEY_USER_PREFIX : &str = "user:";
-pub const KEY_MOUSE_BODY : &str = "mouse:body";
-pub const KEY_MOUSE_HAT : &str = "mouse:hat";
+pub struct SneakyMouseServer<'a> {
+    pub db: LayerData<'a>,
+	pub rng: Pcg64,
+	pub cur_time: f64,
+    pub last_reset_otherwise_server_genisis_unix: i64,
 
-pub const VAL_MOUSE_BODY_DEFAULT : &str = "danipls";
-pub const VAL_CHEESE_DEFAULT_IMAGE : &[u8] = b"danipls";
-pub const VAL_CHEESE_MAX_TTL_S : usize = 60*60;
-// pub const VAL_TRUE : &str = "true";
-// pub const VAL_FALSE : &str = "false";
+    pub rooms: Vec<Room>,
 
-pub const EVENT_DEBUG_CONSOLE : &[u8] = b"debug:console";
-pub const EVENT_DEBUG_ERROR : &[u8] = b"debug:error";
-pub const EVENT_SHUTDOWN : &[u8] = b"sm:shutdown";
-pub const EVENT_CHEESE_REQUEST : &[u8] = b"sm-cheese:request";
-pub const EVENT_CHEESE_COLLECT : &[u8] = b"sm-cheese:collect";
-pub const EVENT_CHEESE_SPAWN : &[u8] = b"sm-cheese:spawn";
-pub const EVENT_CHEESE_UPDATE : &[u8] = b"sm-cheese:update";
-pub const EVENT_CHEESE_COLLECTED : &[u8] = b"sm-cheese:collected";
+	pub cheese_timeouts: Vec<f64>,
+	pub cheese_uids: Vec<u64>,
+	pub cheese_rooms: Vec<Vec<u8>>,//I don't like this
+	pub cheese_ids: Vec<u64>,//hashes
 
-pub const FIELD_MESSAGE : &str = "message";
-pub const FIELD_MOUSE_BODY : &str = "body";
-pub const FIELD_MOUSE_HAT : &str = "hat";
-pub const FIELD_USER_UID : &str = "user-uid";
-pub const FIELD_USER_NAME : &str = "user-name";
-pub const FIELD_ROOM_UID : &str = "room-uid";
-pub const FIELD_CHEESE_ID : &str = "cheese-id";
-pub const FIELD_CHEESE_UID : &str = "cheese-uid";
-pub const FIELD_IMAGE : &str = "image";
-pub const FIELD_TIME_MIN : &str = "time-min";
-pub const FIELD_TIME_MAX : &str = "time-max";
-pub const FIELD_EXCLUSIVE : &str = "exclusive";
-pub const FIELD_SIZE : &str = "size";
-pub const FIELD_SILENT : &str = "silent";
+}
+
+#[derive(Copy, Clone)]
+pub enum Currency {
+    CHEESE,
+    GEMS,
+}
+#[derive(Copy, Clone)]
+pub enum LayerError {
+    Fatal, //(for now this is only thrown on lost connection)
+    NotFound,
+}
+
+pub struct UserData<'a> {
+    pub str_mem: Vec<u8>,
+    pub screen_name: &'a[u8],
+    pub hat: Option<&'a[u8]>,
+    pub body: &'a[u8],
+    pub cheese: i64,
+    pub gems: i64,
+    // pub dvz_powers: [u32; dvz::class::TOTAL],
+}
+
+pub struct CheeseData<'a> {
+    pub str_mem: Vec<u8>,
+    pub image: &'a[u8],
+    pub radical_image: Option<&'a[u8]>,
+    pub time_min: u32,//milisec
+    pub time_max: u32,//milisec
+    pub size: i32,
+    pub original_size: i32,
+    pub squirrel_mult: f32,
+    pub gems: i32,
+    pub silent: bool,
+    pub exclusive: bool,
+}
+
+// pub mod dvz {
+//     pub mod class {
+//         pub const MAX: u32 = 4;
+//         pub const TOTAL: usize = 5;
+//         pub const A: u32 = 0;
+//         pub const B: u32 = 1;
+//         pub const C: u32 = 2;
+//         pub const D: u32 = 3;
+//         pub const E: u32 = 4;
+//     }
+//     pub const DEFENDER_CLASS_A: &[u8] = b"dwarfa";
+//     pub const DEFENDER_CLASS_B: &[u8] = b"dwarfb";
+//     pub const DEFENDER_CLASS_C: &[u8] = b"dwarfc";
+//     pub const DEFENDER_CLASS_D: &[u8] = b"dwarfd";
+//     pub const DEFENDER_CLASS_E: &[u8] = b"dwarfe";
+//     pub const DEFENDER_OUTFIT_A: &[u8] = b"dwarfa";
+//     pub const DEFENDER_OUTFIT_B: &[u8] = b"dwarfb";
+//     pub const DEFENDER_OUTFIT_C: &[u8] = b"dwarfc";
+//     pub const DEFENDER_OUTFIT_D: &[u8] = b"dwarfd";
+//     pub const DEFENDER_OUTFIT_E: &[u8] = b"dwarfe";
+//     pub mod state {
+//         pub const INACTIVE: u32 = 0;
+//         pub const READY_UP: u32 = 1;
+//         pub const EVENT: u32 = 2;
+//     }
+// }
+
+pub const ASCII_NEG: u8 = 45;
+pub const ASCII_0: u8 = 48;
+pub const ASCII_9: u8 = ASCII_0 + 9;
+pub const ASCII_NEWLINE: u8 = 10;
+pub const STR_NULL: &str = "null";
+pub const POW2TO64_F64: f64 = ((1u64<<63) as f64)*2.0;
+
+pub const SM_RESET_EPOCH_UNIX: i64 = 1640516400;
+pub const SECS_IN_DAY_UNIX: i64 = 60*60*24;
+
+pub const CHEESE_RADICAL_MULT: f32 = 1.1;
+pub const CHEESE_TTL: f64 = 5.0*60.0*60.0;
 
 
-pub const CHEESE_MAX_CONCURRENT : usize = 555;
-pub const CHEESE_FLAG_SILENT : u64 = 1;
-pub const CHEESE_FLAG_EXCLUSIVE : u64 = 2;
-pub const CHEESE_DEFAULT : &[u8] = b"cheese";
+pub mod event {
+    pub mod input {
+        pub const DEBUG_CONSOLE:  &[u8] = b"debug:console";
+        pub const CHEESE_GIVE:    &[u8] = b"sm-cheese:give";
+        pub const CHEESE_SPAWN:   &[u8] = b"sm-cheese:spawn";
+        pub const CHEESE_REQUEST: &[u8] = b"sm-cheese:request";
+        pub const CHEESE_COLLECT: &[u8] = b"sm-cheese:collect";
+        pub const CHEESE_DESPAWN: &[u8] = b"sm-cheese:despawn";
+    }
+    pub mod output {
+        pub const DEBUG_ERROR:   &[u8] = b"debug:error";
+        pub const CHEESE_AWARD:  &[u8] = b"sm-cheese:award";
+        pub const CHEESE_UPDATE: &[u8] = b"sm-cheese:update";
+        pub const CHEESE_QUEUE:  &[u8] = b"sm-cheese:queue";
+    }
+    pub mod field {
+        pub const MESSAGE: &str = "message";
+        pub const MOUSE_BODY: &str = "body";
+        pub const MOUSE_HAT: &str = "hat";
+        pub const USER_ID: &str = "user-id";
+        pub const ROOM_ID: &str = "room-id";
+        pub const USER_NAME: &str = "user-name";
+        pub const CHEESE_DELTA: &str = "cheese-delta";
+        pub const GEM_DELTA: &str = "gems-delta";
+        pub const CHEESE_COST: &str = "cheese-cost";
+        pub const GEM_COST: &str = "gem-cost";
+        pub const DEST_ID: &str = "dest-id";
+        pub const SRC_ID: &str = "src-id";
+
+        pub const CHEESE_ID: &str = "cheese-id";
+        pub const CHEESE_UUID: &str = "cheese-uuid";
+        pub const IMAGE: &str = "image";
+        pub const RADICAL_IMAGE: &str = "radical-image";
+        pub const TIME_MIN: &str = "time-min";
+        pub const TIME_MAX: &str = "time-max";
+        pub const EXCLUSIVE: &str = "exclusive";
+        pub const SIZE: &str = "size";
+        pub const ORIGINAL_SIZE: &str = "original-size";
+        pub const SQUIRREL_MULT: &str = "squirrel-mult";
+        pub const SILENT: &str = "silent";
+        pub const SIZE_MULT: &str = "size-mult";
+        pub const SIZE_INCR: &str = "size-add";
+        pub const GEMS: &str = "gems";
+    }
+    pub mod val {
+        pub const CHEESE_STRAT_CANCEL: &[u8] = b"cancel";
+        pub const CHEESE_STRAT_OVERFLOW: &[u8] = b"overflow";
+        pub const CHEESE_STRAT_SATURATE: &[u8] = b"saturate";
+    }
+    pub const CHEESE_SIZE_MAX: i32 = 555_555_555;
+    pub const CHEESE_GEMS_MAX: i32 = 555_555_555;
+    pub const TIMEOUT_MAX: f64 = 0.5;
+}
 
 
-pub const DEBUG_FLOOD_ALL_STREAMS : bool = true;//sets all streams to 0-0 as their last id and disables last id saving
+
+pub mod layer {
+    pub const TIME_BETWEEN_RETRY_CON: f64 = 5.0;
+    pub const RETRY_CON_TIMEOUT: f64 = 60.0;
+    pub const STREAM_READ_COUNT: usize = 55;
+
+    pub mod default {//It is assumed that if a value is not present here its default value is 0 or None
+        pub const CHEESE_IMAGE: &[u8] = b"danipls";
+        pub const CHEESE_RADICAL_IMAGE: &[u8] = b"danipls";
+        pub const CHEESE_TIME_MIN: u32 = 4*60*1000;
+        pub const CHEESE_TIME_MAX: u32 = 5*60*1000;
+        pub const CHEESE_SIZE: i32 = 1;
+        pub const LAST_ID: &str = "0-0";//either $ or 0-0 are acceptable here
+        pub const SCREEN_NAME: &str = "I am Error";
+        pub const MOUSE_BODY: &str = "danipls";
+    }
+    pub mod key {
+        pub const LAST_ID: &str = "sm-server:last-id";
+        pub const USERUUID_HM: &str = "sm-server:user-uuid";
+        pub const MAXUUID: &str = "sm-server:user-uuid-max";
+        pub const CHEESE_UID_MAX: &str = "sm-server:cheese-uid-max";
+
+        pub const GLOBAL_CHEESE_RANKING: &str = "sm-server:global-cheese-ranking";
+        pub const DAILY_RESET_TIMESTAMP_UNIX: &str = "sm-server:daily-reset-unix";
+        pub const GLOBAL_GEMS_RANKING: &str = "sm-server:global-gems-ranking";
+        pub const DAILY_CHEESE_RANKING: &str = "sm-server:daily-cheese-ranking";
+
+        pub mod prefix {
+            pub const CHEESE_DATA: &str = "sm-server:cheese-temp:";
+            pub const USER: &str = "sm-server:user:";
+            pub const CHEESE: &str = "sm-server:cheese:";
+        }
+        pub mod cheese {
+            pub const IMAGE: &str = "image";
+            pub const RADICAL: &str = "radical";
+            pub const TIME_MIN: &str = "time-min";
+            pub const TIME_MAX: &str = "time-max";
+            pub const SIZE: &str = "size";
+            pub const ORIGINAL_SIZE: &str = "original-size";
+            pub const GEMS: &str = "gems";
+            pub const SQUIRREL_MULT: &str = "squirrel-mult";
+            pub const SILENT: &str = "silent";
+            pub const EXCLUSIVE: &str = "exclusive";
+        }
+        pub mod user {
+            pub const SCREEN_NAME: &str = "screen-name";
+            pub const BODY: &str = "body";
+            pub const HAT: &str = "hat";
+            pub const CHEESE: &str = "cheese";
+            pub const GEMS: &str = "gems";
+        }
+    }
+}
+pub mod http {
+    pub const CONNECTION_TIMEOUT: f64 = 1.0;
+    pub const REQUEST_SIZE_MAX: usize = 5555;
+    pub mod status {
+        pub const OK: &str ="200 OK";
+        pub const NOT_FOUND: &str ="404 Not Found";
+        pub const METHOD_NOT_ALLOWED: &str = "405 Method Not Allowed";
+        // pub const BAD_REQUEST: &str = "400 Bad Request";
+    }
+}
+
+pub fn generate_default_user<'a>(screen_name: &[u8]) -> UserData<'a> {
+    let mut mem = Vec::<u8>::new();
+    mem.extend_from_slice(screen_name);
+    let name = unsafe {
+        std::slice::from_raw_parts(mem.as_ptr(), mem.len())
+    };
+    UserData{
+        str_mem: mem,
+        screen_name: name,
+        hat: None,
+        body: layer::default::MOUSE_BODY.as_bytes(),
+        cheese: 0,
+        gems: 0,
+    }
+}
+pub fn generate_default_cheese<'a>() -> CheeseData<'a> {
+    CheeseData{
+        str_mem: Vec::<u8>::new(),
+        image: layer::default::CHEESE_IMAGE,
+        radical_image: Some(layer::default::CHEESE_RADICAL_IMAGE),
+        time_min: layer::default::CHEESE_TIME_MIN,
+        time_max: layer::default::CHEESE_TIME_MAX,
+        size: layer::default::CHEESE_SIZE,
+        original_size: layer::default::CHEESE_SIZE,
+        gems: 0,
+        squirrel_mult: 0.0,
+        silent: false,
+        exclusive: false,
+    }
+}
+
