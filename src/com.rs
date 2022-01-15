@@ -1,9 +1,7 @@
 //By Mami
-use rand_pcg::*;
 use crate::config::*;
 use crate::config::event::*;
 use crate::util::*;
-use rand::{Rng};
 
 
 pub fn send_error(db: &mut LayerData, error: &String) {
@@ -105,7 +103,7 @@ pub fn auto_retry_flush_pipe(db: &mut LayerData) -> Result<redis::Value, ()> {
 }
 
 
-pub fn cheese_queue(db: &mut LayerData, trans_mem: &mut Vec<u8>, room: &[u8], user_id: &[u8], user: UserData) -> Result<(), ()> {
+pub fn cheese_queue(db: &mut LayerData, trans_mem: &mut Vec<u8>, room: &[u8], user_id: &[u8], user: &UserData) -> Result<(), ()> {
 	db.pipe.cmd("XADD");
 
 	db.pipe.arg(event::output::CHEESE_QUEUE).arg("*");
@@ -179,3 +177,75 @@ pub fn cheese_award(db: &mut LayerData, trans_mem: &mut Vec<u8>, dest_id: &[u8],
 	return Ok(());
 }
 
+
+
+
+/*
+pub fn dvz_start(db: &mut LayerData, trans_mem: &mut Vec<u8>, room: &[u8], user_id: &[u8], user: &UserData, outfit: &[u8]) -> Result<(), ()> {
+	db.pipe.cmd("XADD");
+
+	db.pipe.arg(event::output::DVZ_START).arg("*");
+	db.pipe.arg(field::ROOM_ID).arg(room);
+	db.pipe.arg(field::FORT_IMAGE).arg(fort_image);
+	db.pipe.arg(field::EXPLANATION_TEXT).arg(text);
+
+
+	auto_retry_flush_pipe(db)?;
+	return Ok(());
+}
+
+pub fn dvz_queue(db: &mut LayerData, trans_mem: &mut Vec<u8>, room: &[u8], user_id: &[u8], user: &UserData, outfit: &[u8]) -> Result<(), ()> {
+	db.pipe.cmd("XADD");
+
+	db.pipe.arg(event::output::DVZ_QUEUE).arg("*");
+	db.pipe.arg(field::ROOM_ID).arg(room);
+	db.pipe.arg(field::USER_ID).arg(user_id);
+	db.pipe.arg(field::USER_NAME).arg(user.screen_name);
+
+	db.pipe.arg(field::MOUSE_BODY).arg(user.body);
+	if let Some(hat) = user.hat {
+		db.pipe.arg(field::MOUSE_HAT).arg(hat);
+	}
+
+	db.pipe.arg(field::DVZ_CLASS_OUTFIT).arg(outfit);
+
+	auto_retry_flush_pipe(db)?;
+	return Ok(());
+}
+
+pub fn dvz_event(db: &mut LayerData, trans_mem: &mut Vec<u8>, room: &[u8], user_id: &[u8], user: &UserData, outfit: &[u8]) -> Result<(), ()> {
+	db.pipe.cmd("XADD");
+
+	db.pipe.arg(event::output::DVZ_EVENT).arg("*");
+	db.pipe.arg(field::ROOM_ID).arg(room);
+	db.pipe.arg(field::EXPLANATION_TEXT).arg(text);
+	db.pipe.arg(field::ENEMY_IMAGE).arg(enemy_image);
+
+	auto_retry_flush_pipe(db)?;
+	return Ok(());
+}
+
+pub fn dvz_event_result(db: &mut LayerData, trans_mem: &mut Vec<u8>, room: &[u8], user_id: &[u8], user: &UserData, outfit: &[u8]) -> Result<(), ()> {
+	db.pipe.cmd("XADD");
+
+	db.pipe.arg(event::output::DVZ_EVENT_RESULT).arg("*");
+	db.pipe.arg(field::ROOM_ID).arg(room);
+	db.pipe.arg(field::EXPLANATION_TEXT).arg(text);
+	db.pipe.arg(field::VICTORY).arg(is_victory);
+
+	auto_retry_flush_pipe(db)?;
+	return Ok(());
+}
+
+pub fn dvz_attack(db: &mut LayerData, trans_mem: &mut Vec<u8>, room: &[u8], user_id: &[u8], user: &UserData, outfit: &[u8]) -> Result<(), ()> {
+	db.pipe.cmd("XADD");
+
+	db.pipe.arg(event::output::DVZ_EVENT).arg("*");
+	db.pipe.arg(field::ROOM_ID).arg(room);
+	// db.pipe.arg(field::EXPLANATION_TEXT).arg(text);
+	db.pipe.arg(field::ATTACK_TYPE).arg(attack_type);
+
+	auto_retry_flush_pipe(db)?;
+	return Ok(());
+}
+*/

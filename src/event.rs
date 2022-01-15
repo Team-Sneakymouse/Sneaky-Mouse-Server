@@ -1,10 +1,10 @@
 //By Mami
-use rand_pcg::*;
 use crate::config::*;
 use crate::config::event::*;
 use crate::util::*;
 use crate::db;
 use crate::com;
+use rand_pcg::*;
 use rand::{Rng};
 use chrono::{Utc};
 
@@ -28,7 +28,7 @@ pub fn get_event_list() -> [&'static [u8]; 6] {
 	return v;
 }
 
-pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name : &[u8], event_uid : &[u8], keys : &[&[u8]], vals : &[&[u8]], trans_mem : &mut Vec<u8>) -> Result<(), ()> {
+pub fn server_event_received(server_state: &mut SneakyMouseServer, event_name: &[u8], event_uid: &[u8], keys: &[&[u8]], vals: &[&[u8]], trans_mem: &mut Vec<u8>) -> Result<(), ()> {
 	match event_name {
 		event::input::CHEESE_GIVE => {//Non-atomic
 			if let Some(dest_id) = find_field_u8s(field::DEST_ID, keys, vals) {
@@ -116,7 +116,7 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 
 
 			let mut cheese;
-			let cheese_id_hash : u64;
+			let cheese_id_hash: u64;
 			if let Some(cheese_id) = find_field_u8s(field::CHEESE_ID, keys, vals) {
 				let mut hasher = DefaultHasher::new();//I swear to god if this allocates
 				Hash::hash_slice(cheese_id, &mut hasher);
@@ -204,7 +204,7 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 
 
 			let (uuid, user) = db::get_or_create_user_from_id(&mut server_state.db, trans_mem, user_id, user_screen_name)?;
-			com::cheese_queue(&mut server_state.db, trans_mem, room, user_id, user)?;
+			com::cheese_queue(&mut server_state.db, trans_mem, room, user_id, &user)?;
 
 
 			} else {missing_field(server_state, event_name, event_uid, keys, vals, field::ROOM_ID)}
@@ -270,15 +270,6 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 				}
 			}
 		},
-		// event::input::SHUTDOWN => {
-		// 	print!("shutdown request acknowledged, closing the server\n");
-
-		// 	for i in 0..server_state.cheese_rooms.len() {
-		// 		com::cheese_despawn(&mut server_state.db, trans_mem, &server_state.cheese_rooms[i])?;
-		// 	}
-
-		// 	return Err(())
-		// }
 		_ => {
 			panic!("fatal error: we received an unrecognized event from redis, '{}', please check the events list\n", String::from_utf8_lossy(event_name));
 		}
@@ -287,16 +278,11 @@ pub fn server_event_received(server_state : &mut SneakyMouseServer, event_name :
 }
 
 
-pub fn server_update(server_state : &mut SneakyMouseServer, trans_mem : &mut Vec<u8>, delta : f64) -> Result<f64, ()> {
+pub fn server_update(server_state: &mut SneakyMouseServer, trans_mem: &mut Vec<u8>, delta: f64) -> Result<f64, ()> {
 	server_state.cur_time += delta;
 
 	//check unix timestamp and do reset if enough time has passed
-	//the rule will be if now
-
-
-
-
-	let now_unix: i64 = Utc::now().timestamp(); //60*60*24
+	let now_unix: i64 = Utc::now().timestamp();
 	let last_reset_unix: i64 = server_state.last_reset_otherwise_server_genisis_unix;
 	/*
 	We want to add a day to the last_reset time and round it down so that it equals SM_RESET_EPOCH%SECS_IN_DAY + c*SECS_IN_DAY for some int c.
@@ -359,4 +345,11 @@ pub fn server_update(server_state : &mut SneakyMouseServer, trans_mem : &mut Vec
 	}
 
 	Ok(next_timeout)
+}
+
+pub fn server_shutdown(server_state: &mut SneakyMouseServer, trans_mem: &mut Vec<u8>) -> Result<(),()> {
+	for i in 0..server_state.cheese_rooms.len() {
+		com::cheese_despawn(&mut server_state.db, trans_mem, &server_state.cheese_rooms[i])?;
+	}
+	return db::flush(&mut server_state.db, trans_mem);
 }

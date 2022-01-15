@@ -12,6 +12,7 @@ mod com;
 mod http_server;
 mod util;
 mod event;
+// mod dvz;
 use chrono::{Utc};
 use event::*;
 use rand::{Rng, RngCore, SeedableRng};
@@ -47,6 +48,8 @@ fn server_main() -> Result<(), ()> {
 		rng: Pcg64::from_entropy(),
 		cur_time: 0.0,
 		last_reset_otherwise_server_genisis_unix: Utc::now().timestamp(),
+
+		rooms: Vec::new(),
 
 		cheese_timeouts: Vec::new(),
 		cheese_uids: Vec::new(),
@@ -171,8 +174,8 @@ fn server_main() -> Result<(), ()> {
 		{
 			let output = http_server::poll(&mut http_server_state, &mut trans_mem);
 
-			if output.shutdown {//This is the only intended exit point atm
-				return db::flush(&mut server_state.db, &mut trans_mem);
+			if output.shutdown {//NOTE: This is the only intended exit point atm
+				return event::server_shutdown(&mut server_state, &mut trans_mem);
 			}
 		}
 	}

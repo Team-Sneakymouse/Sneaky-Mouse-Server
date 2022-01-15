@@ -3,6 +3,8 @@ use crate::config::*;
 use crate::com;
 use crate::event;
 use redis::FromRedisValue;
+use rand_pcg::*;
+use rand::{Rng, RngCore};
 
 pub fn push_u64(mem: &mut Vec<u8>, i: u64) {
 	if i >= 10 {
@@ -239,4 +241,24 @@ pub fn missing_field(server_state: &mut SneakyMouseServer, event_name: &[u8], ev
 
 	print!("{}\n", error);
 	com::send_error(&mut server_state.db, &error);
+}
+
+
+pub fn rand_f64(rng: &mut Pcg64) -> f64 {
+	return (rng.next_u64() as f64)/POW2TO64_F64;
+}
+
+pub fn rand_d20(rng: &mut Pcg64) -> u32 {
+	return (rng.next_u64()%20) as u32 + 1;
+}
+
+pub fn rand_biased_d20(rng: &mut Pcg64) -> u32 {
+	return ((rng.next_u64()%22) as u32).clamp(1, 20);
+}
+
+pub fn rand_kobold_d20(rng: &mut Pcg64) -> u32 {
+	let r = rng.next_u64();
+	let r1 = (r%20) as u32 + 1;
+	let r2 = ((r/20)%20) as u32 + 1;
+	return if r1 == 1 || r2 == 1 {1} else {u32::max(r1, r2)};
 }

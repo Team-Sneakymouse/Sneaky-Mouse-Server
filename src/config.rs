@@ -6,6 +6,7 @@ pub struct LayerData<'a> {
 	pub redis_con: redis::Connection,
 	pub redis_address: &'a str,
     pub pipe: redis::Pipeline,
+
 }
 pub struct HTTPServer<'a> {
 	pub disabled: bool,
@@ -15,6 +16,21 @@ pub struct HTTPServer<'a> {
 pub struct HTTPServerOutput {
     pub shutdown: bool
 }
+pub struct Room {
+    pub id: Vec<u8>,
+    // pub dvz_state: u32,
+    // pub dvz_raid_sizes: [u32; dvz::class::TOTAL],
+    // pub dvz_defenders: Vec<u64>,
+    // pub dvz_defender_classes: Vec<u8>,
+    // pub dvz_defender_class_totals: [u32; dvz::class::TOTAL],
+    // pub dvz_money_donated: u64,
+    // pub dvz_events_total: u32,
+    // pub dvz_event_type: u32,
+    // pub dvz_event_death_roll: u32,
+    // pub dvz_event_defenders_needed: u32,
+    // pub dvz_event_defenders: Vec<u64>,
+    // pub dvz_event_defenders_attacks: Vec<u8>,
+}
 
 pub struct SneakyMouseServer<'a> {
     pub db: LayerData<'a>,
@@ -22,10 +38,13 @@ pub struct SneakyMouseServer<'a> {
 	pub cur_time: f64,
     pub last_reset_otherwise_server_genisis_unix: i64,
 
+    pub rooms: Vec<Room>,
+
 	pub cheese_timeouts: Vec<f64>,
 	pub cheese_uids: Vec<u64>,
 	pub cheese_rooms: Vec<Vec<u8>>,//I don't like this
 	pub cheese_ids: Vec<u64>,//hashes
+
 }
 
 #[derive(Copy, Clone)]
@@ -46,6 +65,7 @@ pub struct UserData<'a> {
     pub body: &'a[u8],
     pub cheese: i64,
     pub gems: i64,
+    // pub dvz_powers: [u32; dvz::class::TOTAL],
 }
 
 pub struct CheeseData<'a> {
@@ -62,12 +82,39 @@ pub struct CheeseData<'a> {
     pub exclusive: bool,
 }
 
+// pub mod dvz {
+//     pub mod class {
+//         pub const MAX: u32 = 4;
+//         pub const TOTAL: usize = 5;
+//         pub const A: u32 = 0;
+//         pub const B: u32 = 1;
+//         pub const C: u32 = 2;
+//         pub const D: u32 = 3;
+//         pub const E: u32 = 4;
+//     }
+//     pub const DEFENDER_CLASS_A: &[u8] = b"dwarfa";
+//     pub const DEFENDER_CLASS_B: &[u8] = b"dwarfb";
+//     pub const DEFENDER_CLASS_C: &[u8] = b"dwarfc";
+//     pub const DEFENDER_CLASS_D: &[u8] = b"dwarfd";
+//     pub const DEFENDER_CLASS_E: &[u8] = b"dwarfe";
+//     pub const DEFENDER_OUTFIT_A: &[u8] = b"dwarfa";
+//     pub const DEFENDER_OUTFIT_B: &[u8] = b"dwarfb";
+//     pub const DEFENDER_OUTFIT_C: &[u8] = b"dwarfc";
+//     pub const DEFENDER_OUTFIT_D: &[u8] = b"dwarfd";
+//     pub const DEFENDER_OUTFIT_E: &[u8] = b"dwarfe";
+//     pub mod state {
+//         pub const INACTIVE: u32 = 0;
+//         pub const READY_UP: u32 = 1;
+//         pub const EVENT: u32 = 2;
+//     }
+// }
 
 pub const ASCII_NEG: u8 = 45;
 pub const ASCII_0: u8 = 48;
 pub const ASCII_9: u8 = ASCII_0 + 9;
 pub const ASCII_NEWLINE: u8 = 10;
 pub const STR_NULL: &str = "null";
+pub const POW2TO64_F64: f64 = ((1u64<<63) as f64)*2.0;
 
 pub const SM_RESET_EPOCH_UNIX: i64 = 1640516400;
 pub const SECS_IN_DAY_UNIX: i64 = 60*60*24;
@@ -75,20 +122,21 @@ pub const SECS_IN_DAY_UNIX: i64 = 60*60*24;
 pub const CHEESE_RADICAL_MULT: f32 = 1.1;
 pub const CHEESE_TTL: f64 = 5.0*60.0*60.0;
 
+
 pub mod event {
     pub mod input {
         pub const DEBUG_CONSOLE:  &[u8] = b"debug:console";
         pub const CHEESE_GIVE:    &[u8] = b"sm-cheese:give";
-        pub const CHEESE_SPAWN  : &[u8] = b"sm-cheese:spawn";
+        pub const CHEESE_SPAWN:   &[u8] = b"sm-cheese:spawn";
         pub const CHEESE_REQUEST: &[u8] = b"sm-cheese:request";
         pub const CHEESE_COLLECT: &[u8] = b"sm-cheese:collect";
         pub const CHEESE_DESPAWN: &[u8] = b"sm-cheese:despawn";
     }
     pub mod output {
-        pub const DEBUG_ERROR: &[u8] = b"debug:error";
-        pub const CHEESE_AWARD: &[u8] = b"sm-cheese:award";
-        pub const CHEESE_UPDATE : &[u8] = b"sm-cheese:update";
-        pub const CHEESE_QUEUE  : &[u8] = b"sm-cheese:queue";
+        pub const DEBUG_ERROR:   &[u8] = b"debug:error";
+        pub const CHEESE_AWARD:  &[u8] = b"sm-cheese:award";
+        pub const CHEESE_UPDATE: &[u8] = b"sm-cheese:update";
+        pub const CHEESE_QUEUE:  &[u8] = b"sm-cheese:queue";
     }
     pub mod field {
         pub const MESSAGE: &str = "message";
@@ -147,20 +195,20 @@ pub mod layer {
         pub const MOUSE_BODY: &str = "danipls";
     }
     pub mod key {
-        pub const LAST_ID: &str = "last_id";
-        pub const USERUUID_HM: &str = "user-uuid";
-        pub const MAXUUID: &str = "user-uuid-max";
-        pub const CHEESE_UID_MAX: &str = "cheese-uid-max";
+        pub const LAST_ID: &str = "sm-server:last-id";
+        pub const USERUUID_HM: &str = "sm-server:user-uuid";
+        pub const MAXUUID: &str = "sm-server:user-uuid-max";
+        pub const CHEESE_UID_MAX: &str = "sm-server:cheese-uid-max";
 
-        pub const GLOBAL_CHEESE_RANKING: &str = "global-cheese-ranking";
-        pub const DAILY_RESET_TIMESTAMP_UNIX: &str = "daily-reset-unix";
-        pub const GLOBAL_GEMS_RANKING: &str = "global-gems-ranking";
-        pub const DAILY_CHEESE_RANKING: &str = "daily-cheese-ranking";
+        pub const GLOBAL_CHEESE_RANKING: &str = "sm-server:global-cheese-ranking";
+        pub const DAILY_RESET_TIMESTAMP_UNIX: &str = "sm-server:daily-reset-unix";
+        pub const GLOBAL_GEMS_RANKING: &str = "sm-server:global-gems-ranking";
+        pub const DAILY_CHEESE_RANKING: &str = "sm-server:daily-cheese-ranking";
 
         pub mod prefix {
-            pub const CHEESE_DATA: &str = "cheese-temp:";
-            pub const USER: &str = "user:";
-            pub const CHEESE: &str = "cheese:";
+            pub const CHEESE_DATA: &str = "sm-server:cheese-temp:";
+            pub const USER: &str = "sm-server:user:";
+            pub const CHEESE: &str = "sm-server:cheese:";
         }
         pub mod cheese {
             pub const IMAGE: &str = "image";
