@@ -3,13 +3,11 @@ FROM rust:1.56
 WORKDIR /sneaky-mouse-server
 
 COPY ./Cargo* ./
-# This is needed for rust to start compiling the dependencies
-COPY ./src/dummy.rs ./src/main.rs
-RUN cargo build --release
-RUN cargo clean -p sneaky-mouse-server --release
-RUN rm src/*.rs
+# Copy and compile dummy first to download and cache the dependencies
+COPY ./src/dummy.rs ./src/dummy.rs
+RUN cargo build --bin dummy --release
 
 COPY ./src/ ./src/
-RUN cargo build --release
+RUN cargo build --bin sm-server --release
 
-CMD ["./target/release/sneaky-mouse-server"]
+CMD ["./target/release/sm-server"]
