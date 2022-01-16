@@ -7,7 +7,7 @@ COPY ./Cargo* ./
 COPY ./src/dummy.rs ./src/main.rs
 RUN cargo build --release
 RUN rm src/*.rs
-RUN rm ./target/release/sneaky-mouse-server
+RUN cargo clean -p sneaky-mouse-server --release
 
 COPY ./src/ ./src/
 RUN cargo build --release
