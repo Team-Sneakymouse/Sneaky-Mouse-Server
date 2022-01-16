@@ -12,3 +12,10 @@ chrono = "*"
 [dependencies.redis]
 version = "*"
 features = ["streams"]
+
+[[bin]]
+name = "sm-server"
+path = "src/main.rs"
+[[bin]]
+name = "dummy"
+path = "src/dummy.rs"
